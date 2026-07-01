@@ -75,7 +75,7 @@ class TestStartedVerdicts:
         finally:
             store.reset(token)
         assert adapter.hook_blocked[0].verdict is Verdict.BLOCK
-        assert store.is_activity_aborted("wf-1", "act-1")
+        assert store.is_activity_aborted(ACTIVITY_CTX.workflow_id, ACTIVITY_CTX.activity_id)
 
     def test_halt_sets_halt_flag(self, fake_core, adapter, store):
         fake_core.queue = [{"verdict": "halt", "reason": "kill"}]
@@ -89,7 +89,7 @@ class TestStartedVerdicts:
         assert store.halt_requested is True
 
     def test_abort_short_circuit_no_network(self, fake_core, adapter, store):
-        store.mark_activity_aborted("wf-1", "act-1")
+        store.mark_activity_aborted(ACTIVITY_CTX.workflow_id, ACTIVITY_CTX.activity_id)
         hook_runtime = HookRuntime(build_runtime(fake_core, adapter, store))
         token = self._bound(store)
         try:
@@ -129,7 +129,7 @@ class TestApprovalFlows:
                 hook_runtime.preflight(FakeSpan(), hook_type=HookType.HTTP_REQUEST)
         finally:
             store.reset(token)
-        assert store.is_activity_aborted("wf-1", "act-1")
+        assert store.is_activity_aborted(ACTIVITY_CTX.workflow_id, ACTIVITY_CTX.activity_id)
 
     def test_sync_approval_without_hitl_fails_safe(self, store, adapter):
         fake_core = FakeCore({"verdict": "require_approval"})  # no approval_id
@@ -186,7 +186,7 @@ class TestCompletedTelemetry:
             hook_runtime.completed(FakeSpan(), hook_type=HookType.HTTP_REQUEST)  # NO raise
         finally:
             store.reset(token)
-        assert store.is_activity_aborted("wf-1", "act-1")  # future execution blocked
+        assert store.is_activity_aborted(ACTIVITY_CTX.workflow_id, ACTIVITY_CTX.activity_id)  # future execution blocked
         assert adapter.completed_results[0].verdict is Verdict.BLOCK
 
     async def test_async_completed(self, fake_core, adapter, store):
