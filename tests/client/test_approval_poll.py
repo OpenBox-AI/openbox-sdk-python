@@ -122,3 +122,51 @@ class TestApprovalPollerLoop:
         )
         assert poller._next_interval(0) == 1.0
         assert poller._next_interval(1) == 5.0  # capped
+
+
+class TestConsecutiveFailureBudget:
+    """Unreachable Core must not hang the governed thread forever (fail-safe)."""
+
+    def test_persistent_poll_failures_raise_timeout(self):
+        def handler(request):
+            raise httpx.ConnectError("core is down")
+
+        client = make_client(handler)
+        poller = ApprovalPoller(
+            client, poll_interval_seconds=0.0, max_consecutive_failures=3
+        )
+        with pytest.raises(ApprovalTimeoutError):
+            poller.wait_for_decision(*ARGS)
+
+    def test_intermittent_failures_reset_the_counter(self):
+        calls = {"n": 0}
+        sequence = [
+            httpx.ConnectError("down"),
+            httpx.ConnectError("down"),
+            {"verdict": "require_approval"},  # success resets the failure count
+            httpx.ConnectError("down"),
+            httpx.ConnectError("down"),
+            {"action": "allow"},
+        ]
+
+        def handler(request):
+            value = sequence[min(calls["n"], len(sequence) - 1)]
+            calls["n"] += 1
+            if isinstance(value, Exception):
+                raise value
+            return httpx.Response(200, json=value)
+
+        poller = ApprovalPoller(
+            make_client(handler), poll_interval_seconds=0.0, max_consecutive_failures=3
+        )
+        assert poller.wait_for_decision(*ARGS).allow_shaped
+
+    async def test_async_failure_budget(self):
+        def handler(request):
+            raise httpx.ConnectError("core is down")
+
+        poller = ApprovalPoller(
+            make_client(handler), poll_interval_seconds=0.0, max_consecutive_failures=2
+        )
+        with pytest.raises(ApprovalTimeoutError):
+            await poller.await_decision(*ARGS)

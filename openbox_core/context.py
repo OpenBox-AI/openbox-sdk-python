@@ -196,9 +196,11 @@ def activity_scope(
     """
     target = store if store is not None else _default_store
     token = target.bind(ctx)
-    if trace_id is not None:
-        target.register_trace(trace_id, ctx)
     try:
+        # Inside the try: a bad trace_id (e.g. non-hex string) must not leak
+        # the ContextVar binding this helper promises to reset.
+        if trace_id is not None:
+            target.register_trace(trace_id, ctx)
         yield ctx
     finally:
         target.reset(token)

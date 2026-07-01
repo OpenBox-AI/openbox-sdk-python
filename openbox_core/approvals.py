@@ -44,12 +44,18 @@ class ApprovalPoller:
         max_wait_seconds: float | None = None,
         backoff_multiplier: float = 1.0,
         max_interval_seconds: float = 60.0,
+        max_consecutive_failures: int = 60,
     ):
         self._client = client
         self._interval = poll_interval_seconds
         self._max_wait = max_wait_seconds
         self._backoff = backoff_multiplier
         self._max_interval = max_interval_seconds
+        # Genuine PENDING may legitimately wait forever (max_wait bounds it),
+        # but an UNREACHABLE Core must not hang the governed thread
+        # indefinitely: N consecutive poll failures raise ApprovalTimeoutError
+        # (fail-safe: the operation does not run).
+        self._max_consecutive_failures = max_consecutive_failures
 
     def _next_interval(self, attempt: int) -> float:
         return min(self._interval * (self._backoff**attempt), self._max_interval)
@@ -67,10 +73,14 @@ class ApprovalPoller:
         """Block until the approval is decided/expired, or the budget runs out."""
         started_at = time.monotonic()
         attempt = 0
+        consecutive_failures = 0
         while True:
             result = self._client.poll_approval(workflow_id, run_id, activity_id)
             if self._is_terminal(result):
                 return result  # type: ignore[return-value]
+            consecutive_failures = consecutive_failures + 1 if result is None else 0
+            if consecutive_failures >= self._max_consecutive_failures:
+                raise ApprovalTimeoutError()
             if self._timed_out(started_at):
                 raise ApprovalTimeoutError(int(self._max_wait * 1000))  # type: ignore[arg-type]
             time.sleep(self._next_interval(attempt))
@@ -82,10 +92,14 @@ class ApprovalPoller:
         """Async :meth:`wait_for_decision`."""
         started_at = time.monotonic()
         attempt = 0
+        consecutive_failures = 0
         while True:
             result = await self._client.apoll_approval(workflow_id, run_id, activity_id)
             if self._is_terminal(result):
                 return result  # type: ignore[return-value]
+            consecutive_failures = consecutive_failures + 1 if result is None else 0
+            if consecutive_failures >= self._max_consecutive_failures:
+                raise ApprovalTimeoutError()
             if self._timed_out(started_at):
                 raise ApprovalTimeoutError(int(self._max_wait * 1000))  # type: ignore[arg-type]
             await asyncio.sleep(self._next_interval(attempt))

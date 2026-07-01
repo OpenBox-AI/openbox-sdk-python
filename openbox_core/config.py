@@ -208,7 +208,12 @@ class OpenBoxConfig:
                 f"got: '{self.api_key[:15]}...' (showing first 15 chars)"
             )
 
-        self.timeout_seconds = float(self.timeout_seconds)
+        try:
+            self.timeout_seconds = float(self.timeout_seconds)
+        except (TypeError, ValueError):
+            raise OpenBoxConfigError(
+                f"timeout_seconds must be numeric, got {self.timeout_seconds!r}"
+            ) from None
 
         if self.on_api_error not in ("fail_open", "fail_closed"):
             raise OpenBoxConfigError(

@@ -36,10 +36,6 @@ from ..validation.span_normalization import (
 
 __all__ = ["to_core_span_data"]
 
-# Structural fields present on EVERY wire span even when null (exclude_none
-# must not drop them — Core relies on explicit started-stage nulls).
-_ALWAYS_PRESENT = ("span_id", "trace_id", "name", "stage", "start_time", "end_time", "duration_ns")
-
 # Best-effort semantic attribute mapping: wire field -> OTel keys (new, legacy).
 _SEMANTIC_ATTR_MAP: dict[str, tuple[str, ...]] = {
     "http_url": ("url.full", "http.url"),

@@ -62,3 +62,45 @@ class TestPendingAndRaw:
     def test_raw_preserved(self):
         data = {"action": "allow", "surprise": [1, 2]}
         assert ApprovalResult.from_dict(data).raw == data
+
+
+class TestStrictDecisionVocabulary:
+    """C1 hardening: approvals never fail-open on unparseable decisions."""
+
+    def test_empty_action_does_not_shadow_verdict(self):
+        result = ApprovalResult.from_dict({"verdict": "require_approval", "action": ""})
+        assert result.verdict is Verdict.REQUIRE_APPROVAL
+        assert result.is_pending()
+        assert not result.allow_shaped
+
+    def test_whitespace_action_treated_absent(self):
+        result = ApprovalResult.from_dict({"verdict": "block", "action": "   "})
+        assert result.verdict is Verdict.BLOCK
+        assert result.is_blocking()
+
+    def test_unknown_action_vocabulary_is_pending_never_allow(self):
+        for junk in ("denied", "pending", "approved-maybe", "yes"):
+            result = ApprovalResult.from_dict({"action": junk})
+            assert result.verdict is None, junk
+            assert result.is_pending(), junk
+            assert not result.allow_shaped, junk
+
+    def test_unknown_verdict_vocabulary_is_pending(self):
+        result = ApprovalResult.from_dict({"verdict": "banana"})
+        assert result.verdict is None
+        assert result.is_pending()
+
+    def test_empty_both_fields_pending(self):
+        result = ApprovalResult.from_dict({"verdict": "", "action": ""})
+        assert result.verdict is None
+        assert result.is_pending()
+
+    def test_known_vocabulary_still_parses(self):
+        assert ApprovalResult.from_dict({"action": "continue"}).verdict is Verdict.ALLOW
+        assert ApprovalResult.from_dict({"action": "require-approval"}).verdict is Verdict.REQUIRE_APPROVAL
+        assert ApprovalResult.from_dict({"verdict": "stop"}).verdict is Verdict.HALT
+
+    def test_non_string_decision_values_pending(self):
+        result = ApprovalResult.from_dict({"action": 1, "verdict": True})
+        assert result.verdict is None
+        assert result.is_pending()
