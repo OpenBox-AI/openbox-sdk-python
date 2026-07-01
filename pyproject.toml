@@ -75,4 +75,6 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]
-ignore = ["E501"]
+# E501: line length is advisory. UP042: (str, Enum) is deliberate — StrEnum
+# changes str(member) semantics; wire enums keep Temporal-SDK parity.
+ignore = ["E501", "UP042"]
