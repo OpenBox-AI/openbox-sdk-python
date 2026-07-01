@@ -147,8 +147,15 @@ class GovernanceGate:
     def _finalize_payload(
         self, payload: dict, diagnostics: list[Diagnostic]
     ) -> tuple[dict, list[Diagnostic]]:
-        """JSON-safety + privacy redaction, applied BEFORE signing/sending."""
-        payload = to_json_safe(payload)
+        """JSON-safety + privacy redaction, applied BEFORE signing/sending.
+
+        ``exclude_none=False`` is deliberate: started-stage spans carry
+        EXPLICIT ``end_time: null`` / ``duration_ns: null`` (Core's non-pointer
+        int64 relies on them) and the Temporal SDK never strips nulls — parity
+        means nulls survive to the wire. Omit-when-absent is handled where
+        payloads are BUILT (keys left out), not by dropping None here.
+        """
+        payload = to_json_safe(payload, exclude_none=False)
         redact_keys = self._config.privacy.redact_keys
         if redact_keys:
             payload, changed = apply_redaction(payload, redact_keys)
