@@ -1,3 +1,142 @@
-"""OpenBoxRuntime — owns config, adapter, gate, client, context store, and instrumentation manager."""
+"""OpenBoxRuntime — owns config, adapter, gate, client, context store, and
+(from the instrumentation phase) the instrumentation manager.
 
-__all__: list[str] = []
+The runtime is the composition root for non-sandbox code:
+
+    config  = OpenBoxConfig.resolve(...)
+    runtime = OpenBoxRuntime(config, adapter=MyFrameworkAdapter())
+    runtime.install_instrumentation()
+    ...
+    runtime.close()
+
+Lifecycle helpers evaluate through the strict gate and delegate native
+enforcement (block/halt/approval) to the adapter callbacks.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from .adapters.base import CoreAdapter, FrameworkAdapter
+from .client import EvaluationClient
+from .config import OpenBoxConfig
+from .context import ContextStore, default_context_store
+from .contracts.events import EventEnvelope
+from .contracts.results import EvaluationResult, Verdict
+from .errors import GuardrailsValidationError
+from .gate import GovernanceGate
+
+__all__ = ["OpenBoxRuntime"]
+
+
+def _default_payload_builder() -> Any:
+    """Wire the hook evaluate-body assembler when available.
+
+    ``wire/evaluate_payload.py`` owns the body shape; during early bootstrap
+    (before that module exports its builder) hook paths simply stay unwired
+    and the gate raises a clear configuration error if used.
+    """
+    try:
+        from .wire.evaluate_payload import build_evaluate_payload
+
+        return build_evaluate_payload
+    except ImportError:
+        return None
+
+
+class OpenBoxRuntime:
+    """Composition root wiring config → identity → client → gate → adapter."""
+
+    def __init__(
+        self,
+        config: OpenBoxConfig,
+        adapter: FrameworkAdapter | None = None,
+        *,
+        client: EvaluationClient | None = None,
+        context_store: ContextStore | None = None,
+        payload_builder: Any = None,
+    ):
+        self.config = config
+        self.adapter: FrameworkAdapter = adapter if adapter is not None else CoreAdapter()
+        self.context_store = context_store if context_store is not None else default_context_store()
+        self.client = client if client is not None else EvaluationClient(
+            config.api_url,
+            config.api_key,
+            timeout_seconds=config.timeout_seconds,
+            on_api_error=config.on_api_error,
+            identity=config.load_identity(),
+        )
+        self.gate = GovernanceGate(
+            self.client,
+            config,
+            payload_builder=payload_builder if payload_builder is not None else _default_payload_builder(),
+        )
+        self._instrumentation_manager: Any = None  # set by install_instrumentation
+
+    # ── Instrumentation lifecycle (real body lands with the manager) ──────
+
+    def install_instrumentation(self) -> None:
+        """Install generic instrumentation per InstrumentationConfig."""
+        if not self.config.instrumentation.enabled:
+            return
+        if self._instrumentation_manager is None:
+            from .instrumentation.manager import InstrumentationManager
+
+            self._instrumentation_manager = InstrumentationManager(self)
+        self._instrumentation_manager.install()
+
+    def uninstall_instrumentation(self) -> None:
+        """Uninstall instrumentation and restore originals (idempotent)."""
+        if self._instrumentation_manager is not None:
+            self._instrumentation_manager.uninstall()
+
+    # ── Lifecycle evaluation helpers ──────────────────────────────────────
+
+    def evaluate_lifecycle(self, event: EventEnvelope) -> EvaluationResult:
+        """Evaluate + enforce a lifecycle event (sync).
+
+        BLOCK/HALT delegate to ``adapter.raise_lifecycle_blocked``; a
+        guardrails failure raises before any approval flow. REQUIRE_APPROVAL
+        is returned to the caller on the sync path (approval flows are async —
+        use :meth:`aevaluate_lifecycle` to drive the adapter's approval flow).
+        """
+        result = self.gate.evaluate(event)
+        return self._enforce_lifecycle(result, drive_approval=False)
+
+    async def aevaluate_lifecycle(self, event: EventEnvelope) -> EvaluationResult:
+        """Async evaluate + enforce, including the adapter approval flow."""
+        result = await self.gate.aevaluate(event)
+        if result.verdict.requires_approval():
+            self._check_guardrails(result)
+            await self.adapter.handle_approval(result)
+            return result
+        return self._enforce_lifecycle(result, drive_approval=False)
+
+    def _enforce_lifecycle(self, result: EvaluationResult, *, drive_approval: bool) -> EvaluationResult:
+        if result.verdict.should_stop():
+            if result.verdict is Verdict.HALT:
+                self.context_store.request_halt()
+            self.adapter.raise_lifecycle_blocked(result)
+        self._check_guardrails(result)
+        return result
+
+    @staticmethod
+    def _check_guardrails(result: EvaluationResult) -> None:
+        # Guardrails failure outranks approval so it is never swallowed by HITL.
+        if result.guardrails and not result.guardrails.validation_passed:
+            reasons = result.guardrails.get_reason_strings()
+            raise GuardrailsValidationError(reasons or ["Guardrails validation failed"])
+
+    # ── Shutdown ──────────────────────────────────────────────────────────
+
+    def close(self) -> None:
+        """Uninstall instrumentation, clear correlation state, close transports."""
+        self.uninstall_instrumentation()
+        self.context_store.clear()
+        self.client.close()
+
+    async def aclose(self) -> None:
+        """Async :meth:`close` (also closes the async transport)."""
+        self.uninstall_instrumentation()
+        self.context_store.clear()
+        await self.client.aclose()
