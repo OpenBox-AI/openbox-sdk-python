@@ -1,3 +1,187 @@
-"""File wrappers (open/read/write/writelines) calling the hook runtime around file operations."""
+"""File wrapper — governed builtins.open with read/write/writelines counting.
 
-__all__: list[str] = []
+Preflight runs BEFORE the file handle is created (a BLOCK means the file is
+never opened). The returned handle is proxied to count bytes/lines; closing
+emits ONE completed telemetry event with the totals.
+
+Noise control: paths under the interpreter prefix / site-packages / caches
+bypass governance entirely, and (like every hook) operations with no bound
+ActivityContext are skipped by the hook runtime.
+"""
+
+from __future__ import annotations
+
+import builtins
+import logging
+import sys
+import sysconfig
+from typing import Any
+
+from ..contracts.otel_spans import HookType
+from ..otel.provider import get_tracer
+from .shared import get_hook_runtime
+
+logger = logging.getLogger(__name__)
+
+__all__ = ["install_file_io", "uninstall_file_io", "GovernedFile"]
+
+_original_open: Any = None
+
+# Interpreter-owned trees (venv AND base install — they differ in venvs).
+_IGNORED_PATH_PREFIXES = tuple(
+    {
+        sys.prefix,
+        sys.exec_prefix,
+        sys.base_prefix,
+        sys.base_exec_prefix,
+        sysconfig.get_paths().get("stdlib", sys.base_prefix),
+        sysconfig.get_paths().get("platstdlib", sys.base_prefix),
+        sysconfig.get_paths().get("purelib", sys.prefix),
+        sysconfig.get_paths().get("platlib", sys.prefix),
+    }
+)
+
+
+def _mode_operation(mode: str) -> str:
+    if any(c in mode for c in ("w", "a", "x", "+")):
+        return "write"
+    return "read"
+
+
+def _coerce_path(file: Any) -> str | None:
+    """str path for str/bytes/os.PathLike; None for fds/unknowns (pass through)."""
+    import os
+
+    if isinstance(file, int):
+        return None  # file descriptor
+    try:
+        path = os.fspath(file)
+    except TypeError:
+        return None
+    return path.decode(errors="ignore") if isinstance(path, bytes) else path
+
+
+def _should_skip(path: str | None) -> bool:
+    if path is None:
+        return True
+    if "__pycache__" in path:
+        return True
+    return path.startswith(_IGNORED_PATH_PREFIXES)
+
+
+class GovernedFile:
+    """Transparent file proxy counting reads/writes for completed telemetry."""
+
+    def __init__(self, handle: Any, span: Any, path: str, mode: str, runtime: Any):
+        object.__setattr__(self, "_handle", handle)
+        object.__setattr__(self, "_span", span)
+        object.__setattr__(self, "_path", path)
+        object.__setattr__(self, "_mode", mode)
+        object.__setattr__(self, "_runtime", runtime)
+        object.__setattr__(self, "_bytes_read", 0)
+        object.__setattr__(self, "_bytes_written", 0)
+        object.__setattr__(self, "_lines_count", 0)
+        object.__setattr__(self, "_closed_reported", False)
+
+    # ── counted operations ────────────────────────────────────────────────
+
+    def read(self, *args, **kwargs):
+        data = self._handle.read(*args, **kwargs)
+        object.__setattr__(self, "_bytes_read", self._bytes_read + len(data))
+        return data
+
+    def write(self, data):
+        written = self._handle.write(data)
+        object.__setattr__(self, "_bytes_written", self._bytes_written + len(data))
+        return written
+
+    def writelines(self, lines):
+        materialized = list(lines)
+        result = self._handle.writelines(materialized)
+        object.__setattr__(
+            self, "_bytes_written", self._bytes_written + sum(len(line) for line in materialized)
+        )
+        object.__setattr__(self, "_lines_count", self._lines_count + len(materialized))
+        return result
+
+    def close(self):
+        result = self._handle.close()
+        self._report_completed()
+        return result
+
+    def _report_completed(self):
+        if self._closed_reported:
+            return
+        object.__setattr__(self, "_closed_reported", True)
+        try:
+            self._span.end()
+            self._runtime.completed(
+                self._span,
+                hook_type=HookType.FILE_OPERATION,
+                fields={
+                    "file_path": self._path,
+                    "file_mode": self._mode,
+                    "file_operation": _mode_operation(self._mode),
+                    "bytes_read": self._bytes_read or None,
+                    "bytes_written": self._bytes_written or None,
+                    "lines_count": self._lines_count or None,
+                },
+            )
+        except Exception:
+            logger.debug("file completed telemetry failed", exc_info=True)
+
+    # ── passthrough ───────────────────────────────────────────────────────
+
+    def __enter__(self):
+        self._handle.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        result = self._handle.__exit__(exc_type, exc_value, traceback)
+        self._report_completed()
+        return result
+
+    def __iter__(self):
+        return iter(self._handle)
+
+    def __getattr__(self, name):
+        return getattr(self._handle, name)
+
+
+def _governed_open(file, mode="r", *args, **kwargs):
+    runtime = get_hook_runtime()
+    path = _coerce_path(file)
+    if runtime is None or _should_skip(path):
+        return _original_open(file, mode, *args, **kwargs)
+    span = get_tracer().start_span(f"file {_mode_operation(mode)}")
+    # BLOCK/HALT raises here — the file handle is never created.
+    runtime.preflight(
+        span,
+        hook_type=HookType.FILE_OPERATION,
+        identifier=path,
+        fields={
+            "file_path": path,
+            "file_mode": mode,
+            "file_operation": _mode_operation(mode),
+        },
+    )
+    handle = _original_open(file, mode, *args, **kwargs)
+    return GovernedFile(handle, span, path, mode, runtime)
+
+
+def install_file_io() -> bool:
+    """Idempotent builtins.open patch (guard flag mirrors the Temporal SDK)."""
+    global _original_open
+    if _original_open is not None:
+        return True
+    _original_open = builtins.open
+    builtins.open = _governed_open
+    return True
+
+
+def uninstall_file_io() -> None:
+    global _original_open
+    if _original_open is None:
+        return
+    builtins.open = _original_open
+    _original_open = None

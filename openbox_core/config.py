@@ -85,7 +85,8 @@ class InstrumentationConfig:
     enabled: bool = True
     http_enabled: bool = True
     db_enabled: bool = True
-    file_enabled: bool = True
+    # File IO instrumentation is opt-in (Temporal parity: too noisy by default).
+    file_enabled: bool = False
     function_enabled: bool = True
     llm_enabled: bool = False  # LLM instrumentation lands when scoped
     install_opentelemetry: bool = True
