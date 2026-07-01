@@ -77,3 +77,13 @@ class TestGovernanceFlags:
         assert store.halt_requested is True
         store.clear()
         assert store.halt_requested is False
+
+
+class TestScopeRegistrationFailureSafety:
+    def test_bad_trace_id_does_not_leak_binding(self):
+        # register_trace failure inside the scope must still reset the binding.
+        store = ContextStore()
+        with pytest.raises(ValueError):
+            with activity_scope(CTX, trace_id="not-hex!", store=store):
+                pass  # never reached
+        assert store.current_activity_context() is None

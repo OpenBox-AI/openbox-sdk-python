@@ -169,3 +169,36 @@ class TestExecutorThreadPropagation:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             resolved = pool.submit(raw_thread_work).result(timeout=10)
         assert resolved is ACTIVITY_CTX
+
+
+class TestIgnoredUrlNormalization:
+    """Recursion guard survives host-case/default-port representation drift."""
+
+    def test_case_and_default_port_normalized(self):
+        from openbox_core.instrumentation.http import (
+            set_ignored_url_prefixes,
+            should_ignore_url,
+        )
+
+        set_ignored_url_prefixes({"https://Core.Example.com"})
+        try:
+            # httpx normalizes request URLs: lowercase host, default port dropped.
+            assert should_ignore_url("https://core.example.com/api/v1/governance/evaluate")
+            assert should_ignore_url("https://core.example.com:443/anything")
+            assert not should_ignore_url("http://core.example.com/x")  # scheme differs
+            assert not should_ignore_url("https://other.example.com/x")
+        finally:
+            set_ignored_url_prefixes(set())
+
+    def test_explicit_nonstandard_port_respected(self):
+        from openbox_core.instrumentation.http import (
+            set_ignored_url_prefixes,
+            should_ignore_url,
+        )
+
+        set_ignored_url_prefixes({"http://localhost:8080"})
+        try:
+            assert should_ignore_url("http://localhost:8080/api/v1/governance/evaluate")
+            assert not should_ignore_url("http://localhost:9090/api")
+        finally:
+            set_ignored_url_prefixes(set())

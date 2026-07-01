@@ -215,11 +215,42 @@ class ApprovalResult:
     expired: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
 
+    # Known decision vocabulary for approvals (v1.1 values + v1.0 aliases).
+    # Anything OUTSIDE this set parses to None (pending) — the evaluate-path
+    # leniency of Verdict.from_string (unknown -> ALLOW, legacy parity) is
+    # HAZARDOUS at the human-approval trust boundary and is not used here.
+    _DECISION_VOCABULARY = frozenset(
+        {
+            "allow",
+            "constrain",
+            "require_approval",
+            "request_approval",
+            "block",
+            "halt",
+            "continue",
+            "stop",
+        }
+    )
+
+    @staticmethod
+    def _parse_decision(value: Any) -> Verdict | None:
+        """Strict, fail-safe decision parsing: empty/unknown -> None (pending)."""
+        if not isinstance(value, str) or not value.strip():
+            return None
+        normalized = value.strip().lower().replace("-", "_")
+        if normalized not in ApprovalResult._DECISION_VOCABULARY:
+            return None
+        return Verdict.from_string(normalized)
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ApprovalResult:
         action = data.get("action")
+        # Empty/whitespace action is ABSENT — it must not shadow the verdict
+        # field (the legacy ``verdict or action`` fallthrough had this right).
+        if not isinstance(action, str) or not action.strip():
+            action = None
         verdict_source = action if action is not None else data.get("verdict")
-        verdict = Verdict.from_string(verdict_source) if verdict_source is not None else None
+        verdict = cls._parse_decision(verdict_source)
         return cls(
             verdict=verdict,
             action=action,

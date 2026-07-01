@@ -22,6 +22,7 @@ from ..approvals import ApprovalPoller
 from ..contracts.events import EventEnvelope
 from ..contracts.otel_spans import HookType, Stage
 from ..contracts.results import EvaluationResult, Verdict
+from ..errors import GovernanceBlockedError
 from ..hooks.events import build_hook_event, resolve_context
 from ..runtime import OpenBoxRuntime
 
@@ -106,7 +107,12 @@ class HookRuntime:
         verdict = result.verdict
         if verdict.should_stop():
             self._mark_stopped(result, span)
-            self._adapter.raise_hook_blocked(result)  # NoReturn
+            self._adapter.raise_hook_blocked(result)  # NoReturn by contract
+            # Defense in depth: a misbehaving adapter that RETURNS from its
+            # NoReturn callback must not fall through to run the operation.
+            raise GovernanceBlockedError(
+                result.verdict, result.reason or "Blocked (adapter returned)"
+            )
         if verdict.requires_approval():
             return self._sync_approval(result, span)
         return True
@@ -115,7 +121,12 @@ class HookRuntime:
         verdict = result.verdict
         if verdict.should_stop():
             self._mark_stopped(result, span)
-            self._adapter.raise_hook_blocked(result)  # NoReturn
+            self._adapter.raise_hook_blocked(result)  # NoReturn by contract
+            # Defense in depth: a misbehaving adapter that RETURNS from its
+            # NoReturn callback must not fall through to run the operation.
+            raise GovernanceBlockedError(
+                result.verdict, result.reason or "Blocked (adapter returned)"
+            )
         if verdict.requires_approval():
             # Adapter drives its native approval flow; returning ⇒ approved.
             await self._adapter.handle_approval(result)
@@ -131,15 +142,22 @@ class HookRuntime:
         ctx = resolve_context(self._store, span)
         if self._sync_poller is None or not result.approval_id or ctx is None:
             self._mark_stopped(result, span)
-            self._adapter.raise_hook_blocked(result)  # NoReturn
+            self._adapter.raise_hook_blocked(result)  # NoReturn by contract
+            # Defense in depth: a misbehaving adapter that RETURNS from its
+            # NoReturn callback must not fall through to run the operation.
+            raise GovernanceBlockedError(
+                result.verdict, result.reason or "Blocked (adapter returned)"
+            )
         approval = self._sync_poller.wait_for_decision(
             ctx.workflow_id or "", ctx.run_id or "", ctx.activity_id or ""
         )
         if approval.allow_shaped:
             return True
         self._mark_stopped(result, span)
-        self._adapter.raise_hook_blocked(result)  # NoReturn
-        return False  # unreachable; adapters must raise
+        self._adapter.raise_hook_blocked(result)  # NoReturn by contract
+        raise GovernanceBlockedError(
+            result.verdict, result.reason or "Blocked (adapter returned)"
+        )
 
     def _mark_stopped(self, result: EvaluationResult, span: Any) -> None:
         ctx = resolve_context(self._store, span)

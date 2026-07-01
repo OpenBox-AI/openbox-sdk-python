@@ -31,6 +31,28 @@ __all__ = [
 
 _ignored_url_prefixes: set[str] = set()
 
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _normalize_url_prefix(url: str) -> str:
+    """Canonical prefix form: lowercase scheme/host, explicit default port,
+    no trailing slash. httpx normalizes request URLs (lowercased host,
+    default port stripped) — comparing RAW config strings against that would
+    miss e.g. ``https://Core.example`` vs ``https://core.example`` and let
+    the evaluate call govern itself (unbounded recursion)."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url.rstrip("/")
+    if not parts.scheme or not parts.hostname:
+        return url.rstrip("/")
+    scheme = parts.scheme.lower()
+    port = parts.port if parts.port is not None else _DEFAULT_PORTS.get(scheme)
+    netloc = parts.hostname.lower() + (f":{port}" if port is not None else "")
+    return f"{scheme}://{netloc}{parts.path}".rstrip("/")
+
 # span_id -> perf_counter at request start (duration for the response hook).
 _HOOK_TIMINGS_MAX = 4096
 _hook_timings: dict[int, float] = {}
@@ -38,13 +60,14 @@ _hook_timings: dict[int, float] = {}
 
 def set_ignored_url_prefixes(prefixes: set[str]) -> None:
     global _ignored_url_prefixes
-    _ignored_url_prefixes = {p.rstrip("/") for p in prefixes if p}
+    _ignored_url_prefixes = {_normalize_url_prefix(p) for p in prefixes if p}
 
 
 def should_ignore_url(url: str | None) -> bool:
     if not url:
         return True
-    return any(url.startswith(prefix) for prefix in _ignored_url_prefixes)
+    normalized = _normalize_url_prefix(url)
+    return any(normalized.startswith(prefix) for prefix in _ignored_url_prefixes)
 
 
 def _record_timing(span: Any) -> None:
