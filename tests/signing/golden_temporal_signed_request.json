@@ -1,0 +1,42 @@
+{
+  "_generated_by": "tests/signing/generate_golden_fixture_from_temporal_signer.py",
+  "_source_signer": "openbox-temporal-sdk-python/openbox/request_signing.py",
+  "method": "POST",
+  "path": "/api/v1/governance/evaluate",
+  "payload": {
+    "source": "workflow-telemetry",
+    "event_type": "ActivityStarted",
+    "workflow_id": "wf-golden",
+    "run_id": "run-golden",
+    "workflow_type": "GoldenWorkflow",
+    "task_queue": "golden-queue",
+    "activity_id": "act-1",
+    "activity_type": "charge_card",
+    "hook_trigger": true,
+    "spans": [
+      {
+        "span_id": "00f067aa0ba902b7",
+        "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736"
+      }
+    ],
+    "span_count": 1,
+    "timestamp": "2026-07-02T00:00:00.000Z",
+    "note": "unicode-caf\u00e9-\u2615"
+  },
+  "api_key": "obx_test_goldenfixture",
+  "agent_did": "did:aip:12345678-1234-5678-1234-567812345678",
+  "seed_b64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  "timestamp": "2026-07-02T00:00:00.123456+00:00",
+  "nonce": "Zm9vYmFyLWdvbGRlbi1ub25jZS1mixed",
+  "canonical": "POST\n/api/v1/governance/evaluate\n2026-07-02T00:00:00.123456+00:00\nZm9vYmFyLWdvbGRlbi1ub25jZS1mixed\n7a49e279b410d4e53187f5a52a4227bf167f4f681306370db6cb74564aaa3ab9",
+  "body_b64": "eyJzb3VyY2UiOiJ3b3JrZmxvdy10ZWxlbWV0cnkiLCJldmVudF90eXBlIjoiQWN0aXZpdHlTdGFydGVkIiwid29ya2Zsb3dfaWQiOiJ3Zi1nb2xkZW4iLCJydW5faWQiOiJydW4tZ29sZGVuIiwid29ya2Zsb3dfdHlwZSI6IkdvbGRlbldvcmtmbG93IiwidGFza19xdWV1ZSI6ImdvbGRlbi1xdWV1ZSIsImFjdGl2aXR5X2lkIjoiYWN0LTEiLCJhY3Rpdml0eV90eXBlIjoiY2hhcmdlX2NhcmQiLCJob29rX3RyaWdnZXIiOnRydWUsInNwYW5zIjpbeyJzcGFuX2lkIjoiMDBmMDY3YWEwYmE5MDJiNyIsInRyYWNlX2lkIjoiNGJmOTJmMzU3N2IzNGRhNmEzY2U5MjlkMGUwZTQ3MzYifV0sInNwYW5fY291bnQiOjEsInRpbWVzdGFtcCI6IjIwMjYtMDctMDJUMDA6MDA6MDAuMDAwWiIsIm5vdGUiOiJ1bmljb2RlLWNhZlx1MDBlOS1cdTI2MTUifQ==",
+  "body_sha256": "7a49e279b410d4e53187f5a52a4227bf167f4f681306370db6cb74564aaa3ab9",
+  "signed_headers": {
+    "X-OpenBox-Agent-DID": "did:aip:12345678-1234-5678-1234-567812345678",
+    "X-OpenBox-Agent-Timestamp": "2026-07-02T00:00:00.123456+00:00",
+    "X-OpenBox-Agent-Nonce": "Zm9vYmFyLWdvbGRlbi1ub25jZS1mixed",
+    "X-OpenBox-Agent-Signature": "xLV65W0PvVgD5tRiV3RJ2XKRqeura22Y1MmlWigVZDeyDHNSzNgW5OKu5ynWO0jiFTJDP9+o+iSt7U0XQNH7Cg==",
+    "X-OpenBox-Body-SHA256": "7a49e279b410d4e53187f5a52a4227bf167f4f681306370db6cb74564aaa3ab9"
+  },
+  "empty_body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}
