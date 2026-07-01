@@ -29,19 +29,12 @@ from .gate import GovernanceGate
 __all__ = ["OpenBoxRuntime"]
 
 
-def _default_payload_builder() -> Any:
-    """Wire the hook evaluate-body assembler when available.
+def _default_payload_builder(config: OpenBoxConfig) -> Any:
+    """Wire the hook evaluate-body assembler (the single body-shape owner),
+    binding the runtime's privacy config into the gate's one-argument seam."""
+    from .wire.evaluate_payload import make_payload_builder
 
-    ``wire/evaluate_payload.py`` owns the body shape; during early bootstrap
-    (before that module exports its builder) hook paths simply stay unwired
-    and the gate raises a clear configuration error if used.
-    """
-    try:
-        from .wire.evaluate_payload import build_evaluate_payload
-
-        return build_evaluate_payload
-    except ImportError:
-        return None
+    return make_payload_builder(config.privacy)
 
 
 class OpenBoxRuntime:
@@ -69,7 +62,7 @@ class OpenBoxRuntime:
         self.gate = GovernanceGate(
             self.client,
             config,
-            payload_builder=payload_builder if payload_builder is not None else _default_payload_builder(),
+            payload_builder=payload_builder if payload_builder is not None else _default_payload_builder(config),
         )
         self._instrumentation_manager: Any = None  # set by install_instrumentation
 
