@@ -1,0 +1,288 @@
+"""OpenBox base SDK — unified exception hierarchy.
+
+Pure module: no network, crypto, OTel, logging, or wall-clock imports. Safe to
+import from constrained framework paths (e.g. the Temporal workflow sandbox).
+
+Hierarchy:
+    OpenBoxError (base)
+    ├── ContractError               # strict-gate event/runtime contract violation
+    ├── OpenBoxConfigError
+    │   ├── OpenBoxAuthError
+    │   │   └── OpenBoxSigningError # Core rejected a signed (AIP DID) request
+    │   ├── OpenBoxNetworkError
+    │   └── OpenBoxInsecureURLError
+    ├── GovernanceBlockedError      # hook/activity verdict BLOCK
+    ├── GovernanceHaltError         # verdict HALT (framework-level termination)
+    ├── GovernanceAPIError          # governance API failure (fail_closed)
+    ├── GuardrailsValidationError   # guardrails validation_passed=False
+    ├── ApprovalExpiredError        # HITL approval window expired
+    ├── ApprovalRejectedError       # HITL approval explicitly rejected
+    └── ApprovalTimeoutError        # HITL polling exceeded max wait
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .contracts.results import Verdict
+
+__all__ = [
+    "OpenBoxError",
+    "ContractError",
+    "OpenBoxConfigError",
+    "OpenBoxAuthError",
+    "OpenBoxNetworkError",
+    "OpenBoxInsecureURLError",
+    "OpenBoxSigningError",
+    "map_signing_error",
+    "GovernanceBlockedError",
+    "GovernanceHaltError",
+    "GovernanceAPIError",
+    "GuardrailsValidationError",
+    "ApprovalExpiredError",
+    "ApprovalRejectedError",
+    "ApprovalTimeoutError",
+    "extract_governance_error",
+]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Base
+# ═══════════════════════════════════════════════════════════════════
+
+
+class OpenBoxError(Exception):
+    """Base class for all OpenBox SDK errors."""
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Strict-gate contract violations
+# ═══════════════════════════════════════════════════════════════════
+
+
+class ContractError(OpenBoxError):
+    """Raised by the always-strict gate on a malformed event/runtime contract.
+
+    Contract violations raise *before* any network send, regardless of the
+    ``on_api_error`` fail-open/fail-closed setting — fail-open applies only to
+    network errors, never to contract violations.
+
+    Attributes:
+        code: Machine-readable violation code (e.g. ``HOOK_TRIGGER_FALSE``).
+        detail: Optional structured context about the violation.
+    """
+
+    def __init__(self, message: str, code: str = "", detail: dict | None = None):
+        self.code = code
+        self.detail = detail or {}
+        super().__init__(message)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Configuration errors
+# ═══════════════════════════════════════════════════════════════════
+
+
+class OpenBoxConfigError(OpenBoxError):
+    """Raised when OpenBox configuration fails."""
+
+
+class OpenBoxAuthError(OpenBoxConfigError):
+    """Raised when API key validation fails."""
+
+
+class OpenBoxNetworkError(OpenBoxConfigError):
+    """Raised when network connectivity fails."""
+
+
+class OpenBoxInsecureURLError(OpenBoxConfigError):
+    """Raised when HTTP is used for non-localhost URLs."""
+
+
+class OpenBoxSigningError(OpenBoxAuthError):
+    """Raised when Core rejects a signed (AIP DID) request.
+
+    Attributes:
+        reason_code: Core's machine reason code (e.g. ``signature_invalid``).
+    """
+
+    def __init__(self, message: str, reason_code: str | None = None):
+        self.reason_code = reason_code
+        super().__init__(message)
+
+
+# Core signed-request rejection reason codes → actionable SDK guidance.
+# Forward-compatible: Core today often collapses identity failures into a
+# generic "invalid token" body with no machine code; these richer messages
+# activate once Core emits a machine reason code ("reason_code"/"code"/"reason").
+_SIGNING_REASON_MESSAGES: dict[str, str] = {
+    "signature_invalid": (
+        "Request signature rejected (signature_invalid). The signed bytes did not "
+        "match — usually a body-hash mismatch (send content= bytes, never json=) or "
+        "a wrong/rotated private key."
+    ),
+    "nonce_replayed": (
+        "Request nonce was already used (nonce_replayed). Each request must carry a "
+        "fresh nonce; do not retry a fully-prepared request verbatim."
+    ),
+    "did_agent_mismatch": (
+        "DID does not match the authenticated agent (did_agent_mismatch). Check that "
+        "agent_did matches the agent the API key/private key were provisioned for."
+    ),
+    "verifier_not_configured": (
+        "Core has no verifier for this agent (verifier_not_configured). The agent's "
+        "public key may not be imported to KMS yet — re-provision the agent."
+    ),
+    # Core's code is "timestamp_outside_window"; "timestamp_skew" kept as an alias.
+    "timestamp_outside_window": (
+        "Request timestamp outside the allowed window (timestamp_outside_window). Sync "
+        "the host clock (NTP); signatures are valid only within ±300s."
+    ),
+    "timestamp_skew": (
+        "Request timestamp outside the allowed window (timestamp_skew). Sync the host "
+        "clock (NTP); signatures are valid only within ±300s."
+    ),
+}
+
+
+def map_signing_error(reason_code: str | None, fallback: str = "") -> OpenBoxSigningError:
+    """Map a Core signing reason code to an actionable OpenBoxSigningError.
+
+    Unknown/empty codes fall back to a generic message (optionally augmented with
+    ``fallback`` context). Never raises — always returns an exception to raise.
+    """
+    if reason_code and reason_code in _SIGNING_REASON_MESSAGES:
+        return OpenBoxSigningError(_SIGNING_REASON_MESSAGES[reason_code], reason_code)
+    msg = fallback or (
+        "Signed request rejected by OpenBox Core"
+        + (f" ({reason_code})" if reason_code else "")
+        + "."
+    )
+    return OpenBoxSigningError(msg, reason_code)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Governance verdict errors
+# ═══════════════════════════════════════════════════════════════════
+
+
+class GovernanceBlockedError(OpenBoxError):
+    """Raised when governance blocks an operation (default adapter behavior).
+
+    Framework adapters typically translate this into a native error type; the
+    base adapter raises it directly.
+
+    Attributes:
+        verdict: The Verdict enum value (normalized from string if needed).
+        reason: Human-readable explanation from the policy engine.
+        url: The URL or resource identifier that was blocked (optional).
+    """
+
+    def __init__(self, verdict: str | Verdict, reason: str, url: str = ""):
+        # Lazy import avoids a hard module-level dependency on contracts.
+        if isinstance(verdict, str):
+            from .contracts.results import Verdict
+
+            self.verdict = Verdict.from_string(verdict)
+        else:
+            self.verdict = verdict
+        self.reason = reason
+        self.url = url
+        super().__init__(f"Governance {self.verdict.value}: {reason}")
+
+
+class GovernanceHaltError(OpenBoxError):
+    """Raised when governance halts execution (HALT verdict).
+
+    HALT is the nuclear option — the framework adapter decides how to stop
+    future work (e.g. Temporal terminates the workflow).
+    """
+
+    def __init__(self, message: str):
+        super().__init__(message)
+
+
+class GovernanceAPIError(OpenBoxError):
+    """Raised when the governance API fails and policy is fail_closed."""
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Guardrails errors
+# ═══════════════════════════════════════════════════════════════════
+
+
+class GuardrailsValidationError(OpenBoxError):
+    """Raised when guardrails validation_passed is False.
+
+    Attributes:
+        reasons: List of reason strings from the guardrails evaluation.
+    """
+
+    def __init__(self, reasons: list[str] | None = None):
+        self.reasons = reasons or []
+        reason_str = (
+            "; ".join(self.reasons) if self.reasons else "Guardrails validation failed"
+        )
+        super().__init__(reason_str)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# HITL approval errors
+# ═══════════════════════════════════════════════════════════════════
+
+
+class ApprovalExpiredError(OpenBoxError):
+    """Raised when the HITL approval window expires (server-side deadline)."""
+
+
+class ApprovalRejectedError(OpenBoxError):
+    """Raised when a HITL approval is explicitly rejected by a human."""
+
+
+class ApprovalTimeoutError(OpenBoxError):
+    """Raised when HITL polling exceeds the configured max wait time."""
+
+    def __init__(self, max_wait_ms: int | None = None):
+        self.max_wait_ms = max_wait_ms
+        msg = (
+            f"Approval polling timed out after {max_wait_ms}ms"
+            if max_wait_ms
+            else "Approval polling timed out"
+        )
+        super().__init__(msg)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Utility: exception chain walker
+# ═══════════════════════════════════════════════════════════════════
+
+
+def extract_governance_error(exc: BaseException) -> GovernanceBlockedError | None:
+    """Walk an exception chain to find a wrapped GovernanceBlockedError.
+
+    Frameworks and client libraries wrap errors (e.g. Temporal ActivityError →
+    ApplicationError → original). This utility recovers the original
+    GovernanceBlockedError for verdict inspection.
+
+    Args:
+        exc: Any exception, potentially wrapping a GovernanceBlockedError.
+
+    Returns:
+        The GovernanceBlockedError if found in the chain, None otherwise.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, GovernanceBlockedError):
+            return current
+        # Walk both explicit (__cause__) and implicit (__context__) chains
+        next_exc = getattr(current, "__cause__", None) or getattr(
+            current, "__context__", None
+        )
+        # Also check framework .cause properties (e.g. Temporal ActivityError.cause)
+        if next_exc is None:
+            next_exc = getattr(current, "cause", None)
+        current = next_exc
+    return None
