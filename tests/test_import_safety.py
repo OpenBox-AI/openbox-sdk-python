@@ -68,3 +68,26 @@ def test_pure_import_pulls_no_heavy_modules(target: str) -> None:
         "Keep httpx/cryptography/requests/OTel-instrumentation lazy-imported "
         "inside their modules — never at import time of pure modules."
     )
+
+
+def test_import_performs_zero_file_io():
+    """`import openbox_core` must never open a file — not even package
+    metadata. Frameworks patch builtins.open/io.open with governed wrappers
+    that can (re)import this package mid-evaluation; any import-time file
+    read becomes a circular import or unbounded recursion under those hooks.
+    """
+    code = (
+        "import builtins, io\n"
+        "def _forbidden(*a, **k):\n"
+        "    raise AssertionError(f'file open during import: {a[:1]}')\n"
+        "builtins.open = _forbidden\n"
+        "io.open = _forbidden\n"
+        "import openbox_core\n"
+        "assert openbox_core.__version__\n"
+        "print('PURE')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr
+    assert "PURE" in result.stdout
