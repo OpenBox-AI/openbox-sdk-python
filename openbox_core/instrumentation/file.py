@@ -15,6 +15,7 @@ import builtins
 import logging
 import sys
 import sysconfig
+import threading
 from typing import Any
 
 from ..contracts.otel_spans import HookType
@@ -59,6 +60,13 @@ def _coerce_path(file: Any) -> str | None:
     except TypeError:
         return None
     return path.decode(errors="ignore") if isinstance(path, bytes) else path
+
+
+# Re-entrancy guard: governance evaluation opens files itself (httpx/ssl,
+# package-metadata scans). Governing those opens evaluates again and recurses
+# until RecursionError — any open on a thread already inside file-governance
+# work passes straight through.
+_reentrancy = threading.local()
 
 
 def _should_skip(path: str | None) -> bool:
@@ -113,6 +121,7 @@ class GovernedFile:
         if self._closed_reported:
             return
         object.__setattr__(self, "_closed_reported", True)
+        _reentrancy.active = True
         try:
             self._span.end()
             self._runtime.completed(
@@ -129,6 +138,8 @@ class GovernedFile:
             )
         except Exception:
             logger.debug("file completed telemetry failed", exc_info=True)
+        finally:
+            _reentrancy.active = False
 
     # ── passthrough ───────────────────────────────────────────────────────
 
@@ -151,20 +162,28 @@ class GovernedFile:
 def _governed_open(file, mode="r", *args, **kwargs):
     runtime = get_hook_runtime()
     path = _coerce_path(file)
-    if runtime is None or _should_skip(path):
+    if (
+        runtime is None
+        or getattr(_reentrancy, "active", False)
+        or _should_skip(path)
+    ):
         return _original_open(file, mode, *args, **kwargs)
     span = get_tracer().start_span(f"file {_mode_operation(mode)}")
-    # BLOCK/HALT raises here — the file handle is never created.
-    runtime.preflight(
-        span,
-        hook_type=HookType.FILE_OPERATION,
-        identifier=path,
-        fields={
-            "file_path": path,
-            "file_mode": mode,
-            "file_operation": _mode_operation(mode),
-        },
-    )
+    _reentrancy.active = True
+    try:
+        # BLOCK/HALT raises here — the file handle is never created.
+        runtime.preflight(
+            span,
+            hook_type=HookType.FILE_OPERATION,
+            identifier=path,
+            fields={
+                "file_path": path,
+                "file_mode": mode,
+                "file_operation": _mode_operation(mode),
+            },
+        )
+    finally:
+        _reentrancy.active = False
     handle = _original_open(file, mode, *args, **kwargs)
     return GovernedFile(handle, span, path, mode, runtime)
 
