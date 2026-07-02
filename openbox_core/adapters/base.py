@@ -38,6 +38,12 @@ class FrameworkAdapter(Protocol):
 
         Return normally when approved; raise the framework's native rejection/
         expiry error otherwise. Called BEFORE the real operation runs.
+
+        Adapters may ALSO define a plain-sync ``handle_approval_sync(result)``
+        (not part of the required protocol): when present, sync hook paths
+        delegate to it instead of driving the core inline poller — frameworks
+        whose HITL is retry-based (e.g. Temporal) raise their native retryable
+        pending error there.
         """
         ...
 
