@@ -31,11 +31,70 @@ __all__ = [
 _SPAN_KEY = "_openbox_db_span"
 
 
-def _db_fields(statement: str | None, system: str, operation: str | None = None) -> dict:
+def _db_fields(
+    statement: str | None,
+    system: str,
+    operation: str | None = None,
+    *,
+    db_name: str | None = None,
+    server_address: str | None = None,
+    server_port: int | None = None,
+) -> dict:
+    """Assemble DB wire root fields. ``db_name``/``server_address``/
+    ``server_port`` are populated per driver so the flat SpanData carries the
+    same connection metadata the Temporal legacy hooks emit (null when a driver
+    does not expose them; the projection keeps the keys present regardless)."""
     op = operation
     if op is None and statement:
         op = statement.strip().split(" ", 1)[0].upper() if statement.strip() else None
-    return {"db_system": system, "db_statement": statement, "db_operation": op}
+    port = server_port
+    if port is not None:
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            port = None
+    return {
+        "db_system": system,
+        "db_name": str(db_name) if db_name else None,
+        "db_operation": op,
+        "db_statement": statement,
+        "server_address": server_address,
+        "server_port": port,
+    }
+
+
+def _sqlalchemy_conn_meta(conn: Any) -> tuple[str, str | None, str | None, int | None]:
+    """(dialect, db_name, host, port) from a SQLAlchemy Connection."""
+    engine = getattr(conn, "engine", None)
+    url = getattr(engine, "url", None)
+    dialect = getattr(getattr(conn, "dialect", None), "name", "sql") or "sql"
+    return (
+        dialect,
+        getattr(url, "database", None),
+        getattr(url, "host", None),
+        getattr(url, "port", None),
+    )
+
+
+def _dbapi_conn_meta(tracer_self: Any) -> tuple[str, str | None, str | None, int | None]:
+    """(db_system, db_name, host, port) from an OTel dbapi CursorTracer."""
+    integ = getattr(tracer_self, "_db_api_integration", None)
+    system = getattr(integ, "database_system", "sql") if integ else "sql"
+    db_name = getattr(integ, "database", None) if integ else None
+    props = getattr(integ, "connection_props", None) if integ else None
+    host = props.get("host") if isinstance(props, dict) else None
+    port = props.get("port") if isinstance(props, dict) else None
+    return system or "sql", db_name, host, port
+
+
+def _asyncpg_conn_meta(conn_self: Any) -> tuple[str | None, str | None, int | None]:
+    """(db_name, host, port) from an asyncpg Connection."""
+    addr = getattr(conn_self, "_addr", None)
+    host = addr[0] if isinstance(addr, (tuple, list)) and len(addr) >= 1 else None
+    port = addr[1] if isinstance(addr, (tuple, list)) and len(addr) >= 2 else None
+    params = getattr(conn_self, "_params", None)
+    db_name = getattr(params, "database", None) if params is not None else None
+    return db_name, host, port
 
 
 # ── SQLAlchemy (event listeners — no monkeypatching) ────────────────────────
@@ -50,14 +109,16 @@ def _before_cursor_execute(conn, cursor, statement, parameters, context, execute
     span = get_tracer().start_span(f"db {statement.strip().split(' ', 1)[0].lower()}")
     if context is not None:
         setattr(context, _SPAN_KEY, span)
-    dialect = getattr(getattr(conn, "dialect", None), "name", "sql")
+    dialect, db_name, host, port = _sqlalchemy_conn_meta(conn)
     # Raising here (BLOCK/HALT via adapter) aborts execution — the statement
     # never reaches cursor.execute.
     runtime.preflight(
         span,
         hook_type=HookType.DB_QUERY,
         identifier=statement or "",
-        fields=_db_fields(statement, dialect),
+        fields=_db_fields(
+            statement, dialect, db_name=db_name, server_address=host, server_port=port
+        ),
     )
 
 
@@ -70,12 +131,17 @@ def _after_cursor_execute(conn, cursor, statement, parameters, context, executem
         return
     try:
         rowcount = getattr(cursor, "rowcount", None)
-        dialect = getattr(getattr(conn, "dialect", None), "name", "sql")
+        dialect, db_name, host, port = _sqlalchemy_conn_meta(conn)
         span.end()
         runtime.completed(
             span,
             hook_type=HookType.DB_QUERY,
-            fields={**_db_fields(statement, dialect), "rowcount": rowcount},
+            fields={
+                **_db_fields(
+                    statement, dialect, db_name=db_name, server_address=host, server_port=port
+                ),
+                "rowcount": rowcount,
+            },
         )
     finally:
         if context is not None and hasattr(context, _SPAN_KEY):
@@ -93,11 +159,20 @@ def _handle_error(exception_context) -> None:
     try:
         span.end()
         statement = getattr(exception_context, "statement", None)
+        engine = getattr(exception_context, "engine", None)
+        url = getattr(engine, "url", None)
+        dialect = getattr(getattr(engine, "dialect", None), "name", "sql") or "sql"
         runtime.completed(
             span,
             hook_type=HookType.DB_QUERY,
             fields={
-                **_db_fields(statement, "sql"),
+                **_db_fields(
+                    statement,
+                    dialect,
+                    db_name=getattr(url, "database", None),
+                    server_address=getattr(url, "host", None),
+                    server_port=getattr(url, "port", None),
+                ),
                 "error": str(getattr(exception_context, "original_exception", "error")),
             },
         )
@@ -164,14 +239,23 @@ def install_dbapi() -> bool:
         if runtime is None:
             return _original_traced_execution(tracer_self, cursor, query_method, *args, **kwargs)
         statement = tracer_self.get_statement(cursor, args) if args else ""
-        system = getattr(tracer_self, "_db_api_integration", None)
-        system_name = getattr(system, "database_system", "sql") if system else "sql"
+        system_name, db_name, host, port = _dbapi_conn_meta(tracer_self)
         span = get_tracer().start_span("db query")
+
+        def _fields() -> dict:
+            return _db_fields(
+                str(statement),
+                system_name,
+                db_name=db_name,
+                server_address=host,
+                server_port=port,
+            )
+
         runtime.preflight(
             span,
             hook_type=HookType.DB_QUERY,
             identifier=str(statement),
-            fields=_db_fields(str(statement), system_name),
+            fields=_fields(),
         )
         try:
             result = _original_traced_execution(tracer_self, cursor, query_method, *args, **kwargs)
@@ -180,17 +264,14 @@ def install_dbapi() -> bool:
             runtime.completed(
                 span,
                 hook_type=HookType.DB_QUERY,
-                fields={**_db_fields(str(statement), system_name), "error": str(exc)},
+                fields={**_fields(), "error": str(exc)},
             )
             raise
         span.end()
         runtime.completed(
             span,
             hook_type=HookType.DB_QUERY,
-            fields={
-                **_db_fields(str(statement), system_name),
-                "rowcount": getattr(cursor, "rowcount", None),
-            },
+            fields={**_fields(), "rowcount": getattr(cursor, "rowcount", None)},
         )
         return result
 
@@ -234,12 +315,23 @@ def install_asyncpg() -> bool:
         runtime = get_hook_runtime()
         if runtime is None:
             return await _original_asyncpg_execute(conn_self, query, *args, **kwargs)
+        db_name, host, port = _asyncpg_conn_meta(conn_self)
         span = get_tracer().start_span("db query")
+
+        def _fields() -> dict:
+            return _db_fields(
+                str(query),
+                "postgresql",
+                db_name=db_name,
+                server_address=host,
+                server_port=port,
+            )
+
         await runtime.apreflight(
             span,
             hook_type=HookType.DB_QUERY,
             identifier=str(query),
-            fields=_db_fields(str(query), "postgresql"),
+            fields=_fields(),
         )
         try:
             result = await _original_asyncpg_execute(conn_self, query, *args, **kwargs)
@@ -248,14 +340,14 @@ def install_asyncpg() -> bool:
             await runtime.acompleted(
                 span,
                 hook_type=HookType.DB_QUERY,
-                fields={**_db_fields(str(query), "postgresql"), "error": str(exc)},
+                fields={**_fields(), "error": str(exc)},
             )
             raise
         span.end()
         await runtime.acompleted(
             span,
             hook_type=HookType.DB_QUERY,
-            fields=_db_fields(str(query), "postgresql"),
+            fields=_fields(),
         )
         return result
 

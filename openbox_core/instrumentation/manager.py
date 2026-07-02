@@ -73,6 +73,10 @@ class InstrumentationManager:
                 self._installed_targets.append("requests")
             if http_instrumentation.install_httpx():
                 self._installed_targets.append("httpx")
+                # Body capture patches Client.send AFTER OTel instrumentation so
+                # the captured original send already carries the request hook.
+                if http_instrumentation.install_httpx_body_capture():
+                    self._installed_targets.append("httpx_body_capture")
         else:
             logger.info("HTTP instrumentation disabled by config")
 
@@ -105,6 +109,8 @@ class InstrumentationManager:
         db_instrumentation.uninstall_asyncpg()
         db_instrumentation.uninstall_dbapi()
         db_instrumentation.uninstall_sqlalchemy()
+        # Reverse install order: unwind the send patch before OTel httpx.
+        http_instrumentation.uninstall_httpx_body_capture()
         http_instrumentation.uninstall_httpx()
         http_instrumentation.uninstall_requests()
         if get_hook_runtime() is not None:

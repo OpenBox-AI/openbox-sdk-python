@@ -156,7 +156,9 @@ class TestFunctionDecorator:
         with installed_runtime(fake_core, adapter, store), bound_activity(store):
             assert await acharge(1) == 2
         span = fake_core.completed_payloads[0]["spans"][0]
-        assert "args" not in span
+        # capture_args=False ⇒ args present but null (flat contract always
+        # carries the family key set; the value is simply not captured).
+        assert "args" in span and span["args"] is None
 
     def test_exception_still_reports_completed_with_error(self):
         fake_core = FakeCore({"verdict": "allow"}, {"verdict": "allow"})
