@@ -13,13 +13,6 @@ Heavy entry points are imported explicitly by non-sandbox code:
     from openbox_core.runtime import OpenBoxRuntime
 """
 
-from importlib.metadata import PackageNotFoundError, version
-
-try:
-    __version__ = version("openbox-sdk-python")
-except PackageNotFoundError:  # pragma: no cover - editable installs without metadata
-    __version__ = "0.0.0"
-
 from .errors import (
     ApprovalExpiredError,
     ApprovalRejectedError,
@@ -37,6 +30,15 @@ from .errors import (
     OpenBoxSigningError,
     extract_governance_error,
 )
+
+# STATIC on purpose — never read via importlib.metadata. A metadata lookup
+# OPENS A FILE; with file instrumentation active (frameworks patch
+# builtins.open/io.open with governed wrappers) that read re-enters
+# governance — eagerly it deadlocks package init as a circular import (seen
+# live in Temporal's workflow sandbox), lazily it recurses unboundedly when
+# a per-request header builder resolves the version. Keep in sync with
+# pyproject.toml on release.
+__version__ = "0.1.0"
 
 __all__ = [
     "__version__",
