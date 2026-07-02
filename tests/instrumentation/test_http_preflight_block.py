@@ -93,3 +93,40 @@ class TestHttpxLibrary:
                 response = await client.get(server.url)
             assert response.status_code == 200
         assert len(fake_core.completed_payloads) == 1
+
+
+class TestHeaderRedaction:
+    """Credential headers must never reach governance payloads."""
+
+    def test_sanitize_headers_redacts_credentials(self):
+        from openbox_core.instrumentation.http import sanitize_headers
+
+        headers = sanitize_headers(
+            {
+                "Authorization": "Bearer sk-proj-SECRET",
+                "Cookie": "session=SECRET",
+                "Set-Cookie": "sid=SECRET",
+                b"x-api-key": b"SECRET-BYTES",
+                "content-type": "application/json",
+            }
+        )
+        assert headers["Authorization"] == "[REDACTED]"
+        assert headers["Cookie"] == "[REDACTED]"
+        assert headers["Set-Cookie"] == "[REDACTED]"
+        assert headers["x-api-key"] == "[REDACTED]"
+        assert headers["content-type"] == "application/json"
+        assert "SECRET" not in str(headers)
+        assert sanitize_headers(None) is None
+
+    def test_httpx_started_fields_redact_authorization(self):
+        from openbox_core.instrumentation.http import _httpx_started_fields
+
+        class _RequestInfo:
+            method = b"POST"
+            url = "https://api.openai.com/v1/chat/completions"
+            headers = {"authorization": "Bearer sk-proj-SECRET", "accept": "application/json"}
+
+        fields = _httpx_started_fields(_RequestInfo())
+        assert fields["http_method"] == "POST"  # bytes decoded, not "b'POST'"
+        assert fields["request_headers"]["authorization"] == "[REDACTED]"
+        assert fields["request_headers"]["accept"] == "application/json"

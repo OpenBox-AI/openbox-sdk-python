@@ -63,6 +63,36 @@ def set_ignored_url_prefixes(prefixes: set[str]) -> None:
     _ignored_url_prefixes = {_normalize_url_prefix(p) for p in prefixes if p}
 
 
+# Headers whose values are credentials/secrets — never ship them into
+# governance payloads (they land in Core logs verbatim otherwise).
+_SENSITIVE_HEADERS = frozenset(
+    {
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+        "x-api-key",
+        "api-key",
+        "x-auth-token",
+        "x-amz-security-token",
+    }
+)
+
+
+def sanitize_headers(headers: Any) -> dict | None:
+    """Copy headers with credential values redacted; bytes decoded."""
+    if not headers:
+        return None
+    sanitized = {}
+    for key, value in dict(headers).items():
+        if isinstance(key, bytes):
+            key = key.decode("latin-1", errors="ignore")
+        if isinstance(value, bytes):
+            value = value.decode("latin-1", errors="ignore")
+        sanitized[key] = "[REDACTED]" if str(key).lower() in _SENSITIVE_HEADERS else value
+    return sanitized
+
+
 def should_ignore_url(url: str | None) -> bool:
     if not url:
         return True
@@ -106,7 +136,7 @@ def _requests_request_hook(span: Any, request: Any) -> None:
             body = raw.decode("utf-8", errors="ignore") if isinstance(raw, bytes) else str(raw)
     except Exception:
         pass
-    headers = dict(request.headers) if getattr(request, "headers", None) else None
+    headers = sanitize_headers(getattr(request, "headers", None))
     _record_timing(span)
     runtime.preflight(
         span,
@@ -144,7 +174,7 @@ def _requests_response_hook(span: Any, request: Any, response: Any) -> None:
             "http_url": url,
             "http_status_code": status_code,
             "response_body": body,
-            "response_headers": dict(response.headers) if getattr(response, "headers", None) else None,
+            "response_headers": sanitize_headers(getattr(response, "headers", None)),
             "duration_ns": _pop_duration_ns(span),
             "error": f"HTTP {status_code}" if status_code and status_code >= 400 else None,
         },
@@ -187,7 +217,7 @@ def _httpx_started_fields(request_info: Any) -> dict:
     return {
         "http_method": method or "UNKNOWN",
         "http_url": _httpx_url(request_info),
-        "request_headers": dict(headers) if headers else None,
+        "request_headers": sanitize_headers(headers),
     }
 
 
