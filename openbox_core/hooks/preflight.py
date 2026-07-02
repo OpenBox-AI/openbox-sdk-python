@@ -16,13 +16,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, NoReturn
 
 from ..approvals import ApprovalPoller
 from ..contracts.events import EventEnvelope
 from ..contracts.otel_spans import HookType, Stage
 from ..contracts.results import EvaluationResult, Verdict
-from ..errors import GovernanceBlockedError
+from ..errors import ContractError, GovernanceAPIError, GovernanceBlockedError
 from ..hooks.events import build_hook_event, resolve_context
 from ..runtime import OpenBoxRuntime
 
@@ -66,7 +66,10 @@ class HookRuntime:
         event = self._pre_gate(span, hook_type, fields)
         if event is None:
             return True
-        result = self._gate.preflight(event)
+        try:
+            result = self._gate.preflight(event)
+        except (ContractError, GovernanceAPIError) as e:
+            self._fail_closed_started(e, span)
         return self._decide_started(result, span, sync=True)
 
     async def apreflight(
@@ -81,7 +84,10 @@ class HookRuntime:
         event = self._pre_gate(span, hook_type, fields)
         if event is None:
             return True
-        result = await self._gate.apreflight(event)
+        try:
+            result = await self._gate.apreflight(event)
+        except (ContractError, GovernanceAPIError) as e:
+            self._fail_closed_started(e, span)
         return await self._adecide_started(result, span)
 
     def _pre_gate(
@@ -101,6 +107,30 @@ class HookRuntime:
                 )
         return build_hook_event(
             self._store, span, stage=Stage.STARTED, hook_type=hook_type, fields=fields
+        )
+
+    def _fail_closed_started(self, error: Exception, span: Any) -> NoReturn:
+        """Map a started-hook evaluation failure to a framework-native HALT.
+
+        Reached only when the failure must stop the operation: the client
+        raises ``GovernanceAPIError`` solely under ``on_api_error=fail_closed``
+        (fail-open returns an allow-shaped fallback instead), and started-hook
+        ``ContractError``s always fail closed — a payload we cannot express to
+        Core must not let the operation run ungoverned. Raising the raw error
+        would leave frameworks treating it as a generic (often retryable)
+        failure; routing a HALT-shaped result through the adapter reproduces
+        the legacy semantics (non-retryable halt in Temporal).
+        """
+        halt = EvaluationResult(
+            verdict=Verdict.HALT,
+            reason=f"Governance evaluation failed closed: {error}",
+            fallback_used=True,
+            raw={"fail_closed_error": str(error), "error_type": type(error).__name__},
+        )
+        self._mark_stopped(halt, span)
+        self._adapter.raise_hook_blocked(halt)  # NoReturn by contract
+        raise GovernanceBlockedError(
+            halt.verdict, halt.reason or "Blocked (adapter returned)"
         )
 
     def _decide_started(self, result: EvaluationResult, span: Any, *, sync: bool) -> bool:
@@ -134,11 +164,19 @@ class HookRuntime:
         return True
 
     def _sync_approval(self, result: EvaluationResult, span: Any) -> bool:
-        """Sync wrappers can't await the adapter — drive the core poller.
+        """Sync approval: adapter-native flow first, core poller fallback.
 
-        No poller / no approval_id ⇒ fail safe: blocked (the operation must
+        An adapter exposing ``handle_approval_sync`` owns the flow (e.g.
+        Temporal raises a RETRYABLE pending error and polls on the next
+        attempt — inline polling would wedge its activity thread). Returning
+        normally means approved. Without that seam, drive the core poller;
+        no poller / no approval_id ⇒ fail safe: blocked (the operation must
         not run on an unresolved approval).
         """
+        adapter_sync = getattr(self._adapter, "handle_approval_sync", None)
+        if adapter_sync is not None:
+            adapter_sync(result)
+            return True
         ctx = resolve_context(self._store, span)
         if self._sync_poller is None or not result.approval_id or ctx is None:
             self._mark_stopped(result, span)
