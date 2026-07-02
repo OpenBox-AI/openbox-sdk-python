@@ -38,7 +38,10 @@ def build_evaluate_payload(
     wire_spans: list[dict[str, Any]] = []
     for span in event.spans:
         if isinstance(span, dict) and "otel" in span:
-            wire_span, span_diagnostics = to_core_span_data(span, privacy=privacy)
+            # Hook spans go on the wire FLAT — no ``data`` blob (Temporal parity).
+            wire_span, span_diagnostics = to_core_span_data(
+                span, privacy=privacy, include_otel_data=False
+            )
             diagnostics.extend(span_diagnostics)
         else:
             wire_span = dict(span)

@@ -61,7 +61,7 @@ class TestGoSpanDataCompat:
         assert parsed["trace_id"] == format(TRACE_ID, "032x")
         assert parsed["http_url"] == "https://api.example/x"
         assert parsed["http_method"] == "GET"
-        assert parsed["has_data"] is True
+        assert parsed["has_data"] is False  # flat contract — no data blob
 
     def test_completed_spans_all_hook_types_parse(self):
         spans = [
@@ -98,7 +98,7 @@ class TestGoSpanDataCompat:
         assert parsed[3]["function"] == "charge"
         for report in parsed:
             assert report["span_id"] == format(SPAN_ID, "016x")
-            assert report["has_data"] is True
+            assert report["has_data"] is False  # flat contract — no data blob
 
     def test_parent_span_id_parses_as_pointer_string(self):
         wire = build(Stage.STARTED, HookType.HTTP_REQUEST, {"http.method": "GET", "http.url": "https://x"})

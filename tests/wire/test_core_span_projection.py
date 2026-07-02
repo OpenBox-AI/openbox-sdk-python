@@ -17,11 +17,19 @@ from openbox_core.validation.diagnostics import (
 from openbox_core.wire.core_span import to_core_span_data
 
 
-def project(span=None, *, stage=Stage.STARTED, hook_type=HookType.HTTP_REQUEST, fields=None, privacy=None):
+def project(
+    span=None,
+    *,
+    stage=Stage.STARTED,
+    hook_type=HookType.HTTP_REQUEST,
+    fields=None,
+    privacy=None,
+    include_otel_data=False,
+):
     envelope = from_otel_span(
         span or FakeSpan(), stage=stage, hook_type=hook_type, fields=fields
     )
-    return to_core_span_data(envelope, privacy=privacy)
+    return to_core_span_data(envelope, privacy=privacy, include_otel_data=include_otel_data)
 
 
 class TestInternalEnvelope:
@@ -59,18 +67,36 @@ class TestWireShape:
         assert "otel" not in wire
         assert "openbox" not in wire
 
-    def test_otel_preserved_under_data_only(self):
+    def test_data_absent_by_default(self):
+        # Flat is the wire contract: no ``data`` blob unless explicitly opted in.
+        wire, _ = project(FakeSpan(attributes={"exotic.attr": "yes"}))
+        assert "data" not in wire
+        assert "metadata" not in wire  # no span-level metadata field exists
+
+    def test_otel_preserved_under_data_when_opted_in(self):
         span = FakeSpan(attributes={"exotic.attr": "yes"})
-        wire, _ = project(span)
+        wire, _ = project(span, include_otel_data=True)
         assert wire["data"]["otel"]["attributes"]["exotic.attr"] == "yes"
         assert "metadata" not in wire  # no span-level metadata field exists
 
     def test_data_blob_ids_are_hex_not_int(self):
-        wire, _ = project()
+        wire, _ = project(include_otel_data=True)
         context = wire["data"]["otel"]["context"]
         assert context["span_id"] == format(SPAN_ID, "016x")
         assert context["trace_id"] == format(TRACE_ID, "032x")
         assert wire["data"]["otel"]["parent"]["span_id"] == format(PARENT_ID, "016x")
+
+    def test_common_root_fields_always_present(self):
+        # Every common field present even with an attribute-less span.
+        wire, _ = project(FakeSpan(attributes={}), stage=Stage.STARTED)
+        for field_name in (
+            "span_id", "trace_id", "parent_span_id", "name", "kind", "stage",
+            "start_time", "end_time", "duration_ns", "attributes", "status",
+            "events", "hook_type", "error",
+        ):
+            assert field_name in wire, field_name
+        assert wire["error"] is None
+        assert wire["attributes"] == {}  # present even when empty
 
     def test_hook_type_and_kind_at_root(self):
         wire, _ = project()
