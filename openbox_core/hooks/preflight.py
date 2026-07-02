@@ -173,11 +173,14 @@ class HookRuntime:
         no poller / no approval_id ⇒ fail safe: blocked (the operation must
         not run on an unresolved approval).
         """
+        ctx = resolve_context(self._store, span)
         adapter_sync = getattr(self._adapter, "handle_approval_sync", None)
         if adapter_sync is not None:
-            adapter_sync(result)
+            # Pass the span-resolved context: ambient ContextVar lookup can
+            # miss in user-spawned threads, and the adapter needs the context
+            # for skip-HITL decisions and framework buffer correlation.
+            adapter_sync(result, context=ctx)
             return True
-        ctx = resolve_context(self._store, span)
         if self._sync_poller is None or not result.approval_id or ctx is None:
             self._mark_stopped(result, span)
             self._adapter.raise_hook_blocked(result)  # NoReturn by contract
