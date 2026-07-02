@@ -118,8 +118,8 @@ class _RetryStyleAdapter(RecordingHookAdapter):
         self.sync_approvals = []
         self.approve_sync = False
 
-    def handle_approval_sync(self, result):
-        self.sync_approvals.append(result)
+    def handle_approval_sync(self, result, context=None):
+        self.sync_approvals.append((result, context))
         if not self.approve_sync:
             raise self.Pending("approval pending — retry")
 
@@ -145,6 +145,9 @@ class TestSyncApprovalAdapterSeam:
             hooks.preflight(span, hook_type=HookType.HTTP_REQUEST, fields=HTTP_FIELDS)
 
         assert len(adapter.sync_approvals) == 1
+        # The hook runtime hands the SPAN-RESOLVED context to the seam.
+        _, seam_ctx = adapter.sync_approvals[0]
+        assert seam_ctx is CONFORMANCE_CONTEXT
         # The inline core poller must NOT have been driven.
         assert fake.approval_requests == []
 
