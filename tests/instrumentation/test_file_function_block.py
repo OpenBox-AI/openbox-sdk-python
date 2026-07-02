@@ -165,3 +165,40 @@ class TestFunctionDecorator:
             return value
 
         assert plain(7) == 7  # no installed instrumentation — zero governance
+
+
+class TestFileSelfGovernanceReentrancy:
+    def test_nested_open_during_preflight_passes_through(self, tmp_path):
+        """Evaluation-time file opens (ssl, metadata scans) are never governed."""
+        from openbox_core.conformance.fake_core import FakeCore
+        from openbox_core.conformance.hook_preflight import (
+            CONFORMANCE_CONTEXT,
+            RecordingHookAdapter,
+        )
+        from openbox_core.conformance.instrumentation import (
+            installed_conformance_runtime,
+        )
+        from openbox_core.context import ContextStore, activity_scope
+
+        nested = tmp_path / "metadata-blob.txt"
+        nested.write_text("blob")
+        outer = tmp_path / "app-data.txt"
+        outer.write_text("app")
+        seen = []
+
+        class OpeningFakeCore(FakeCore):
+            def handler(self, request):
+                # Simulates httpx/importlib_metadata opening files mid-evaluate.
+                with open(nested) as fh:
+                    seen.append(fh.read())
+                return super().handler(request)
+
+        store = ContextStore()
+        with installed_conformance_runtime(
+            OpeningFakeCore(), RecordingHookAdapter(), store, file_enabled=True
+        ):
+            with activity_scope(CONFORMANCE_CONTEXT, store=store):
+                with open(outer) as fh:
+                    assert fh.read() == "app"
+
+        assert seen and seen[0] == "blob"  # nested open worked, ungoverned
