@@ -85,8 +85,9 @@ class InstrumentationConfig:
     enabled: bool = True
     http_enabled: bool = True
     db_enabled: bool = True
-    # File IO instrumentation is opt-in (Temporal parity: too noisy by default).
-    file_enabled: bool = False
+    # Safe to default-on: interpreter-owned paths bypass governance and a
+    # re-entrancy guard passes through evaluation-time opens.
+    file_enabled: bool = True
     function_enabled: bool = True
     llm_enabled: bool = False  # LLM instrumentation lands when scoped
     install_opentelemetry: bool = True

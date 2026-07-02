@@ -74,11 +74,23 @@ class TestFileOpen:
                 handle.write("x")
         assert fake_core.payloads == []
 
-    def test_file_disabled_by_default(self, tmp_path):
-        # file_enabled defaults False (Temporal parity: opt-in)
+    def test_file_enabled_by_default(self, tmp_path):
+        # All instrumentation defaults ON (safe since the re-entrancy guard
+        # + interpreter-prefix bypass); file opens under a bound activity
+        # are governed without any toggle.
         fake_core = FakeCore()
         adapter, store = RaisingHookAdapter(), ContextStore()
         with installed_runtime(fake_core, adapter, store), bound_activity(store):
+            with open(tmp_path / "tracked.txt", "w") as handle:
+                handle.write("x")
+        assert fake_core.started_payloads, "default-on file hook sent no events"
+
+    def test_file_opt_out_still_works(self, tmp_path):
+        fake_core = FakeCore()
+        adapter, store = RaisingHookAdapter(), ContextStore()
+        with installed_runtime(
+            fake_core, adapter, store, file_enabled=False
+        ), bound_activity(store):
             with open(tmp_path / "untracked.txt", "w") as handle:
                 handle.write("x")
         assert fake_core.payloads == []
