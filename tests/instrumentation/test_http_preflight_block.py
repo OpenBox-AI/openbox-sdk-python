@@ -130,3 +130,65 @@ class TestHeaderRedaction:
         assert fields["http_method"] == "POST"  # bytes decoded, not "b'POST'"
         assert fields["request_headers"]["authorization"] == "[REDACTED]"
         assert fields["request_headers"]["accept"] == "application/json"
+
+
+def _lower_keys(headers: dict | None) -> dict:
+    """Header keys lowercased — httpx/requests differ on case preservation."""
+    return {str(k).lower(): v for k, v in (headers or {}).items()}
+
+
+class TestHttpBodyCapture:
+    """End-to-end: request/response bodies captured and credential headers
+    redacted in the ACTUAL governance payloads (real instrumentation path)."""
+
+    def test_requests_started_captures_body_and_redacts_auth(self, server):
+        fake_core = FakeCore({"verdict": "allow"}, {"verdict": "allow"})
+        adapter, store = RaisingHookAdapter(), ContextStore()
+        with installed_runtime(fake_core, adapter, store), bound_activity(store):
+            requests.post(
+                server.url,
+                json={"secret_field": 1},
+                headers={"Authorization": "Bearer sk-SECRET"},
+                timeout=5,
+            )
+        started = fake_core.started_payloads[0]["spans"][0]
+        assert _lower_keys(started["request_headers"])["authorization"] == "[REDACTED]"
+        assert started["request_body"] and '"secret_field"' in started["request_body"]
+        completed = fake_core.completed_payloads[0]["spans"][0]
+        assert completed["http_status_code"] == 200
+        assert completed["response_body"] is not None  # server echoes {"ok": true}
+        assert "SECRET" not in str(completed["request_headers"])
+
+    def test_httpx_sync_completed_captures_bodies_and_redacts_auth(self, server):
+        fake_core = FakeCore({"verdict": "allow"}, {"verdict": "allow"})
+        adapter, store = RaisingHookAdapter(), ContextStore()
+        with installed_runtime(fake_core, adapter, store), bound_activity(store):
+            with httpx.Client() as client:
+                client.post(
+                    server.url,
+                    json={"secret_field": 1},
+                    headers={"Authorization": "Bearer sk-SECRET"},
+                )
+        started = fake_core.started_payloads[0]["spans"][0]
+        assert _lower_keys(started["request_headers"])["authorization"] == "[REDACTED]"
+        completed = fake_core.completed_payloads[0]["spans"][0]
+        assert completed["http_status_code"] == 200
+        # Request body reliably available in the Client.send patch.
+        assert completed["request_body"] and '"secret_field"' in completed["request_body"]
+        assert completed["response_body"] is not None
+        assert "SECRET" not in str(completed["request_headers"])
+
+    async def test_httpx_async_completed_captures_bodies(self, server):
+        fake_core = FakeCore({"verdict": "allow"}, {"verdict": "allow"})
+        adapter, store = RaisingHookAdapter(), ContextStore()
+        with installed_runtime(fake_core, adapter, store), bound_activity(store):
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    server.url,
+                    json={"secret_field": 1},
+                    headers={"Authorization": "Bearer sk-SECRET"},
+                )
+        completed = fake_core.completed_payloads[0]["spans"][0]
+        assert completed["request_body"] and '"secret_field"' in completed["request_body"]
+        assert completed["response_body"] is not None
+        assert _lower_keys(completed["request_headers"])["authorization"] == "[REDACTED]"
