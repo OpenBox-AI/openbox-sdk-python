@@ -1,8 +1,16 @@
-"""File wrapper — governed builtins.open with read/write/writelines counting.
+"""File wrapper — governed open() with read/write/writelines counting.
 
 Preflight runs BEFORE the file handle is created (a BLOCK means the file is
 never opened). The returned handle is proxied to count bytes/lines; closing
 emits ONE completed telemetry event with the totals.
+
+Both ``builtins.open`` and ``io.open`` are patched: ``pathlib`` file helpers
+(``Path.open``/``read_text``/``write_text``) call ``io.open`` DIRECTLY and
+never touch ``builtins.open``, so patching only the builtin would leave every
+pathlib file access ungoverned. In CPython the two names reference the SAME
+object and a single logical open resolves through exactly ONE of them
+(direct ``open()`` -> builtins, pathlib -> io), so wiring both to one wrapper
+governs pathlib without any double wrapping or double evaluation.
 
 Noise control: paths under the interpreter prefix / site-packages / caches
 bypass governance entirely, and (like every hook) operations with no bound
@@ -12,6 +20,7 @@ ActivityContext are skipped by the hook runtime.
 from __future__ import annotations
 
 import builtins
+import io
 import logging
 import sys
 import sysconfig
@@ -26,7 +35,13 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["install_file_io", "uninstall_file_io", "GovernedFile"]
 
+# The genuine opener (``builtins.open`` == ``io.open`` pre-patch) — used both
+# to bypass governance and to create the handle after preflight. Non-None
+# while instrumentation is installed (doubles as the idempotency guard).
 _original_open: Any = None
+# Whether we replaced ``io.open`` too, so uninstall restores exactly what we
+# changed (skipped if a foreign wrapper already owned ``io.open`` at install).
+_patched_io: bool = False
 
 # Interpreter-owned trees (venv AND base install — they differ in venvs).
 _IGNORED_PATH_PREFIXES = tuple(
@@ -189,18 +204,30 @@ def _governed_open(file, mode="r", *args, **kwargs):
 
 
 def install_file_io() -> bool:
-    """Idempotent builtins.open patch (guard flag mirrors the Temporal SDK)."""
-    global _original_open
+    """Idempotent open() patch across builtins AND io (guard flag mirrors the
+    Temporal SDK). Patching ``io.open`` is what brings ``pathlib`` file helpers
+    under governance — they bypass ``builtins.open`` entirely."""
+    global _original_open, _patched_io
     if _original_open is not None:
         return True
     _original_open = builtins.open
     builtins.open = _governed_open
+    # pathlib routes through io.open. Only patch it if it is still the genuine
+    # opener — never clobber a foreign wrapper another tool installed first
+    # (that would also make it the wrapper we call as "_original_open").
+    if io.open is _original_open:
+        io.open = _governed_open
+        _patched_io = True
     return True
 
 
 def uninstall_file_io() -> None:
-    global _original_open
+    """Restore both ``builtins.open`` and ``io.open`` to their originals."""
+    global _original_open, _patched_io
     if _original_open is None:
         return
     builtins.open = _original_open
+    if _patched_io:
+        io.open = _original_open
+        _patched_io = False
     _original_open = None

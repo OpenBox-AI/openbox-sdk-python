@@ -1,5 +1,6 @@
 """File + function wrapper conformance — started BLOCK prevents the operation."""
 
+import builtins
 import pathlib
 
 import pytest
@@ -214,3 +215,111 @@ class TestFileSelfGovernanceReentrancy:
                     assert fh.read() == "app"
 
         assert seen and seen[0] == "blob"  # nested open worked, ungoverned
+
+
+class TestPathlibAndIoOpenGovernance:
+    """pathlib helpers (Path.open/read_text/write_text) call io.open directly,
+    bypassing builtins.open — governance must patch both names, with exactly
+    one started + one completed hook per logical open (no double wrapping)."""
+
+    def test_direct_builtins_open_one_started_one_completed(self, tmp_path):
+        fake_core = FakeCore()
+        adapter, store = RaisingHookAdapter(), ContextStore()
+        target = tmp_path / "direct.txt"
+        with installed_runtime(fake_core, adapter, store, file_enabled=True), bound_activity(store):
+            with open(target, "w") as handle:
+                handle.write("hi")
+        assert len(fake_core.started_payloads) == 1
+        assert len(fake_core.completed_payloads) == 1
+        assert fake_core.completed_payloads[0]["spans"][0]["bytes_written"] == 2
+
+    def test_io_open_one_started_one_completed(self, tmp_path):
+        import io
+
+        fake_core = FakeCore()
+        adapter, store = RaisingHookAdapter(), ContextStore()
+        target = tmp_path / "via_io.txt"
+        with installed_runtime(fake_core, adapter, store, file_enabled=True), bound_activity(store):
+            # io.open (NOT builtin open) on purpose — this is the exact name
+            # pathlib routes through; the test proves that name is governed.
+            with io.open(target, "w") as handle:  # noqa: UP020
+                handle.write("io-write")
+        assert len(fake_core.started_payloads) == 1
+        assert len(fake_core.completed_payloads) == 1
+        completed = fake_core.completed_payloads[0]["spans"][0]
+        assert completed["file_operation"] == "write"
+        assert completed["bytes_written"] == 8
+
+    def test_pathlib_path_open_one_started_one_completed(self, tmp_path):
+        fake_core = FakeCore()
+        adapter, store = RaisingHookAdapter(), ContextStore()
+        target = tmp_path / "via_path_open.txt"
+        with installed_runtime(fake_core, adapter, store, file_enabled=True), bound_activity(store):
+            with target.open("w") as handle:
+                handle.write("path-open")
+        assert len(fake_core.started_payloads) == 1
+        assert len(fake_core.completed_payloads) == 1
+        assert fake_core.completed_payloads[0]["spans"][0]["bytes_written"] == 9
+
+    def test_pathlib_write_text_emits_write_span_with_bytes_written(self, tmp_path):
+        fake_core = FakeCore()
+        adapter, store = RaisingHookAdapter(), ContextStore()
+        target = tmp_path / "written.txt"
+        with installed_runtime(fake_core, adapter, store, file_enabled=True), bound_activity(store):
+            target.write_text("pathlib-payload")
+        assert len(fake_core.started_payloads) == 1
+        assert len(fake_core.completed_payloads) == 1
+        started = fake_core.started_payloads[0]["spans"][0]
+        completed = fake_core.completed_payloads[0]["spans"][0]
+        assert started["hook_type"] == "file_operation"
+        assert started["file_path"] == str(target)
+        assert started["file_operation"] == "write"
+        assert completed["file_operation"] == "write"
+        assert completed["bytes_written"] == len("pathlib-payload")
+        # verify OUTSIDE the governed block (instrumentation now uninstalled)
+        assert target.read_text() == "pathlib-payload"
+
+    def test_pathlib_read_text_emits_read_span_with_bytes_read(self, tmp_path):
+        target = tmp_path / "to_read.txt"
+        target.write_text("read-me-please")  # seeded before instrumentation
+        fake_core = FakeCore()
+        adapter, store = RaisingHookAdapter(), ContextStore()
+        with installed_runtime(fake_core, adapter, store, file_enabled=True), bound_activity(store):
+            assert target.read_text() == "read-me-please"
+        assert len(fake_core.started_payloads) == 1
+        assert len(fake_core.completed_payloads) == 1
+        completed = fake_core.completed_payloads[0]["spans"][0]
+        assert completed["file_operation"] == "read"
+        assert completed["bytes_read"] == len("read-me-please")
+
+    def test_uninstall_restores_both_builtins_and_io_open(self):
+        import io
+
+        from openbox_core.instrumentation import file as file_mod
+
+        orig_builtins, orig_io = builtins.open, io.open
+        assert file_mod.install_file_io() is True
+        assert builtins.open is not orig_builtins  # patched
+        assert io.open is not orig_io  # patched
+        file_mod.uninstall_file_io()
+        assert builtins.open is orig_builtins  # restored exactly
+        assert io.open is orig_io  # restored exactly
+
+    def test_pathlib_no_context_skips_governance(self, tmp_path):
+        fake_core = FakeCore()
+        adapter, store = RaisingHookAdapter(), ContextStore()
+        target = tmp_path / "no_ctx.txt"
+        with installed_runtime(fake_core, adapter, store, file_enabled=True):
+            target.write_text("ungoverned")  # no bound_activity
+        assert fake_core.payloads == []
+        assert target.read_text() == "ungoverned"
+
+    def test_pathlib_interpreter_path_bypasses_governance(self):
+        import sysconfig
+
+        fake_core = FakeCore()
+        adapter, store = RaisingHookAdapter(), ContextStore()
+        stdlib_file = pathlib.Path(sysconfig.get_paths()["stdlib"]) / "os.py"
+        with installed_runtime(fake_core, adapter, store, file_enabled=True), bound_activity(store):
+            stdlib_file.read_text()  # via io.open, under stdlib prefix -> skipped
+        assert fake_core.payloads == []
