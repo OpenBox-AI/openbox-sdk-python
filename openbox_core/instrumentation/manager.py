@@ -77,6 +77,10 @@ class InstrumentationManager:
                 # the captured original send already carries the request hook.
                 if http_instrumentation.install_httpx_body_capture():
                     self._installed_targets.append("httpx_body_capture")
+            if http_instrumentation.install_urllib3():
+                self._installed_targets.append("urllib3")
+            if http_instrumentation.install_urllib():
+                self._installed_targets.append("urllib")
         else:
             logger.info("HTTP instrumentation disabled by config")
 
@@ -87,6 +91,10 @@ class InstrumentationManager:
                 self._installed_targets.append("dbapi")
             if db_instrumentation.install_asyncpg():
                 self._installed_targets.append("asyncpg")
+            if db_instrumentation.install_redis():
+                self._installed_targets.append("redis")
+            if db_instrumentation.install_pymongo():
+                self._installed_targets.append("pymongo")
         else:
             logger.info("DB instrumentation disabled by config")
 
@@ -106,10 +114,14 @@ class InstrumentationManager:
         if not self._installed:
             return
         file_instrumentation.uninstall_file_io()
+        db_instrumentation.uninstall_pymongo()
+        db_instrumentation.uninstall_redis()
         db_instrumentation.uninstall_asyncpg()
         db_instrumentation.uninstall_dbapi()
         db_instrumentation.uninstall_sqlalchemy()
         # Reverse install order: unwind the send patch before OTel httpx.
+        http_instrumentation.uninstall_urllib()
+        http_instrumentation.uninstall_urllib3()
         http_instrumentation.uninstall_httpx_body_capture()
         http_instrumentation.uninstall_httpx()
         http_instrumentation.uninstall_requests()
