@@ -38,7 +38,7 @@ from .errors import (
 # live in Temporal's workflow sandbox), lazily it recurses unboundedly when
 # a per-request header builder resolves the version. Keep in sync with
 # pyproject.toml on release.
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "__version__",

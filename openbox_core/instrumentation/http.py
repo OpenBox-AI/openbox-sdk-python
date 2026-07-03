@@ -31,6 +31,10 @@ __all__ = [
     "uninstall_httpx",
     "install_httpx_body_capture",
     "uninstall_httpx_body_capture",
+    "install_urllib3",
+    "uninstall_urllib3",
+    "install_urllib",
+    "uninstall_urllib",
 ]
 
 # Content-type markers safe to capture as a text body.
@@ -516,3 +520,236 @@ def uninstall_httpx_body_capture() -> None:
         logger.debug("httpx body-capture restore skipped", exc_info=True)
     _original_httpx_send = None
     _original_httpx_async_send = None
+
+
+# ── urllib3 (OTel URLLib3Instrumentor hooks) ─────────────────────────────────
+#
+# ``requests`` runs on urllib3; OTel suppresses the nested urllib3 span while a
+# RequestsInstrumentor call is active, so a requests call does NOT double-fire
+# these hooks. urllib3-native calls reach here.
+
+_urllib3_installed = False
+
+
+def _urllib3_url(pool: Any, request_info: Any) -> str:
+    # The OTel urllib3 instrumentor resolves the FULL url on RequestInfo.url;
+    # use it as-is. Only reconstruct if we somehow got a bare path.
+    url = getattr(request_info, "url", None) or getattr(request_info, "request_url", None)
+    if isinstance(url, str) and url.startswith(("http://", "https://")):
+        return url
+    scheme = getattr(pool, "scheme", "http")
+    host = getattr(pool, "host", "unknown")
+    port = getattr(pool, "port", None)
+    path = url or "/"
+    if port and port not in (80, 443):
+        return f"{scheme}://{host}:{port}{path}"
+    return f"{scheme}://{host}{path}"
+
+
+def _urllib3_body(request_info: Any) -> str | None:
+    try:
+        raw = getattr(request_info, "body", None)
+        if not raw:
+            return None
+        return raw.decode("utf-8", errors="ignore") if isinstance(raw, (bytes, bytearray)) else str(raw)
+    except Exception:
+        return None
+
+
+def _urllib3_request_hook(span: Any, pool: Any, request_info: Any) -> None:
+    runtime = get_hook_runtime()
+    if runtime is None:
+        return
+    url = _urllib3_url(pool, request_info)
+    if should_ignore_url(url):
+        return
+    _record_timing(span)
+    runtime.preflight(
+        span,
+        hook_type=HookType.HTTP_REQUEST,
+        identifier=url,
+        fields={
+            "http_method": getattr(request_info, "method", None) or "UNKNOWN",
+            "http_url": url,
+            "request_body": _urllib3_body(request_info),
+            "request_headers": sanitize_headers(getattr(request_info, "headers", None)),
+        },
+    )
+
+
+def _urllib3_response_hook(span: Any, pool: Any, response: Any) -> None:
+    runtime = get_hook_runtime()
+    if runtime is None:
+        return
+    # The response hook has no request_info; the URL degrades to the host root
+    # (matching legacy). Read only ALREADY-BUFFERED content (``_body``, set when
+    # preload_content=True) so a live streaming response is never consumed.
+    scheme = getattr(pool, "scheme", "http")
+    host = getattr(pool, "host", "unknown")
+    port = getattr(pool, "port", None)
+    url = f"{scheme}://{host}:{port}/" if port and port not in (80, 443) else f"{scheme}://{host}/"
+    if should_ignore_url(url):
+        return
+    status_code = getattr(response, "status", None)
+    body = None
+    try:
+        content_type = response.headers.get("content-type", "") if getattr(response, "headers", None) else ""
+        if _is_text_content_type(content_type):
+            raw = getattr(response, "_body", None)
+            if isinstance(raw, (bytes, bytearray)):
+                body = bytes(raw).decode("utf-8", errors="ignore")
+            elif isinstance(raw, str):
+                body = raw
+    except Exception:
+        pass
+    runtime.completed(
+        span,
+        hook_type=HookType.HTTP_REQUEST,
+        fields={
+            "http_method": "UNKNOWN",
+            "http_url": url,
+            "http_status_code": status_code,
+            "response_body": body,
+            "response_headers": sanitize_headers(getattr(response, "headers", None)),
+            "duration_ns": _pop_duration_ns(span),
+            "error": f"HTTP {status_code}" if isinstance(status_code, int) and status_code >= 400 else None,
+        },
+    )
+
+
+def install_urllib3() -> bool:
+    global _urllib3_installed
+    if _urllib3_installed:
+        return True
+    try:
+        from opentelemetry.instrumentation.urllib3 import URLLib3Instrumentor
+    except ImportError:
+        logger.info("urllib3 instrumentation not available (install extra [http]) — deferred")
+        return False
+    URLLib3Instrumentor().instrument(
+        request_hook=_urllib3_request_hook, response_hook=_urllib3_response_hook
+    )
+    _urllib3_installed = True
+    return True
+
+
+def uninstall_urllib3() -> None:
+    global _urllib3_installed
+    if not _urllib3_installed:
+        return
+    try:
+        from opentelemetry.instrumentation.urllib3 import URLLib3Instrumentor
+
+        URLLib3Instrumentor().uninstrument()
+    except Exception:
+        logger.debug("urllib3 uninstrument skipped", exc_info=True)
+    _urllib3_installed = False
+
+
+# ── urllib (stdlib, OTel URLLibInstrumentor hooks) ───────────────────────────
+#
+# Response body is NOT captured: urllib's HTTPResponse.read() consumes the
+# socket stream and would break the caller. Completed carries status only.
+
+_urllib_installed = False
+
+
+def _urllib_url(request: Any) -> str:
+    url = getattr(request, "full_url", None)
+    if url:
+        return str(url)
+    getter = getattr(request, "get_full_url", None)
+    if callable(getter):
+        try:
+            return str(getter())
+        except Exception:
+            return ""
+    return ""
+
+
+def _urllib_method(request: Any) -> str:
+    getter = getattr(request, "get_method", None)
+    if callable(getter):
+        try:
+            return str(getter()) or "UNKNOWN"
+        except Exception:
+            pass
+    return str(getattr(request, "method", None) or "UNKNOWN")
+
+
+def _urllib_request_hook(span: Any, request: Any) -> None:
+    runtime = get_hook_runtime()
+    if runtime is None:
+        return
+    url = _urllib_url(request)
+    if should_ignore_url(url):
+        return
+    _record_timing(span)
+    body = None
+    try:
+        raw = getattr(request, "data", None)
+        if raw:
+            body = raw.decode("utf-8", errors="ignore") if isinstance(raw, (bytes, bytearray)) else str(raw)
+    except Exception:
+        pass
+    runtime.preflight(
+        span,
+        hook_type=HookType.HTTP_REQUEST,
+        identifier=url,
+        fields={
+            "http_method": _urllib_method(request),
+            "http_url": url,
+            "request_body": body,
+            "request_headers": sanitize_headers(getattr(request, "headers", None)),
+        },
+    )
+
+
+def _urllib_response_hook(span: Any, request: Any, response: Any) -> None:
+    runtime = get_hook_runtime()
+    if runtime is None:
+        return
+    url = _urllib_url(request)
+    if should_ignore_url(url):
+        return
+    status_code = getattr(response, "status", None) or getattr(response, "code", None)
+    runtime.completed(
+        span,
+        hook_type=HookType.HTTP_REQUEST,
+        fields={
+            "http_method": _urllib_method(request),
+            "http_url": url,
+            "http_status_code": status_code,
+            "duration_ns": _pop_duration_ns(span),
+            "error": f"HTTP {status_code}" if isinstance(status_code, int) and status_code >= 400 else None,
+        },
+    )
+
+
+def install_urllib() -> bool:
+    global _urllib_installed
+    if _urllib_installed:
+        return True
+    try:
+        from opentelemetry.instrumentation.urllib import URLLibInstrumentor
+    except ImportError:
+        logger.info("urllib instrumentation not available (install extra [http]) — deferred")
+        return False
+    URLLibInstrumentor().instrument(
+        request_hook=_urllib_request_hook, response_hook=_urllib_response_hook
+    )
+    _urllib_installed = True
+    return True
+
+
+def uninstall_urllib() -> None:
+    global _urllib_installed
+    if not _urllib_installed:
+        return
+    try:
+        from opentelemetry.instrumentation.urllib import URLLibInstrumentor
+
+        URLLibInstrumentor().uninstrument()
+    except Exception:
+        logger.debug("urllib uninstrument skipped", exc_info=True)
+    _urllib_installed = False

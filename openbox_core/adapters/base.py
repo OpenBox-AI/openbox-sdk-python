@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from typing import NoReturn
 
     from ..approvals import ApprovalPoller
+    from ..contracts.context import ActivityContext
 
 __all__ = ["FrameworkAdapter", "CoreAdapter"]
 
@@ -56,10 +57,16 @@ class FrameworkAdapter(Protocol):
         verdict. The real operation has NOT run."""
         ...
 
-    def on_completed_hook_result(self, result: EvaluationResult) -> None:
+    def on_completed_hook_result(
+        self, result: EvaluationResult, context: ActivityContext | None = None
+    ) -> None:
         """React to a completed-hook verdict. The operation ALREADY ran —
         implementations may only affect FUTURE execution (e.g. mark the
-        activity/session blocked); they must never pretend to undo work."""
+        activity/session blocked); they must never pretend to undo work.
+
+        ``context`` is the span-resolved ActivityContext (may be None). Frameworks
+        that must bridge a completed BLOCK/HALT to native effects on the correct
+        run/activity read the workflow/run/activity keys from it."""
         ...
 
 
@@ -100,7 +107,9 @@ class CoreAdapter:
     def raise_hook_blocked(self, result: EvaluationResult) -> NoReturn:
         self._raise_stop(result)
 
-    def on_completed_hook_result(self, result: EvaluationResult) -> None:
+    def on_completed_hook_result(
+        self, result: EvaluationResult, context: ActivityContext | None = None
+    ) -> None:
         # Completed telemetry never undoes the operation; the runtime records
         # abort/halt flags for FUTURE execution — nothing to do here.
         return None
