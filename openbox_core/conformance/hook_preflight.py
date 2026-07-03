@@ -37,6 +37,7 @@ class RecordingHookAdapter:
         self.hook_blocked: list[EvaluationResult] = []
         self.lifecycle_blocked: list[EvaluationResult] = []
         self.completed_results: list[EvaluationResult] = []
+        self.completed_contexts: list[ActivityContext | None] = []
         self.approvals: list[EvaluationResult] = []
         self.approve_next = True
 
@@ -53,8 +54,11 @@ class RecordingHookAdapter:
         self.hook_blocked.append(result)
         self._raise(result)
 
-    def on_completed_hook_result(self, result: EvaluationResult) -> None:
+    def on_completed_hook_result(
+        self, result: EvaluationResult, context: ActivityContext | None = None
+    ) -> None:
         self.completed_results.append(result)
+        self.completed_contexts.append(context)
 
     @staticmethod
     def _raise(result: EvaluationResult) -> None:
