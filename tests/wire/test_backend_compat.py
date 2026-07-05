@@ -37,8 +37,8 @@ def go_unmarshal(spans: list[dict]) -> list[dict]:
 
 def build(stage, hook_type, attributes, fields=None):
     span = FakeSpan(attributes=attributes)
-    envelope = from_otel_span(span, stage=stage, hook_type=hook_type, fields=fields)
-    wire, _ = to_core_span_data(envelope)
+    span_data = from_otel_span(span, stage=stage, hook_type=hook_type, fields=fields)
+    wire, _ = to_core_span_data(span_data)
     return wire
 
 

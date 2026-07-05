@@ -36,17 +36,11 @@ _REQUIRED_HANDOFF_FIELDS = ("from_agent_did", "multi_agent_session_id")
 def span_stage(span: Any) -> str | None:
     """Extract the stage from a span payload.
 
-    Tolerates both the internal ``{"otel": ..., "openbox": {"stage": ...}}``
-    envelope and flat wire dicts carrying a top-level ``stage`` key. Enum
-    values normalize via ``.value``.
+    Spans are flat-only: the stage lives at the top level. Enum values normalize
+    via ``.value``.
     """
-    stage: Any = None
     if isinstance(span, dict):
-        openbox_part = span.get("openbox")
-        if isinstance(openbox_part, dict):
-            stage = openbox_part.get("stage")
-        if stage is None:
-            stage = span.get("stage")
+        stage: Any = span.get("stage")
     else:
         stage = getattr(span, "stage", None)
     value = getattr(stage, "value", stage)
@@ -138,6 +132,16 @@ def check_hook_envelope(event: EventEnvelope) -> None:
                 "activity_type": event.activity_type,
             },
         )
+    for index, span in enumerate(event.spans):
+        if isinstance(span, dict):
+            forbidden = sorted({"otel", "openbox", "data"} & set(span))
+            if forbidden:
+                raise ContractError(
+                    "Hook spans must be flat Core SpanData dicts — nested/debug "
+                    f"keys are not allowed at spans[{index}]: {forbidden}",
+                    code="HOOK_SPAN_NOT_FLAT",
+                    detail={"index": index, "forbidden": forbidden},
+                )
 
 
 def check_stage(event: EventEnvelope, expected_stage: str) -> None:

@@ -1,6 +1,6 @@
-"""Wire projection tests — internal envelope -> flat Core SpanData dict."""
+"""Flat SpanData tests — OTel spans become flat Core SpanData immediately."""
 
-from span_fixtures import PARENT_ID, SPAN_ID, TRACE_ID, FakeSpan
+from span_fixtures import SPAN_ID, TRACE_ID, FakeSpan
 
 from openbox_core.config import PrivacyConfig
 from openbox_core.contracts.otel_spans import (
@@ -26,20 +26,24 @@ def project(
     privacy=None,
     include_otel_data=False,
 ):
-    envelope = from_otel_span(
+    span_data = from_otel_span(
         span or FakeSpan(), stage=stage, hook_type=hook_type, fields=fields
     )
-    return to_core_span_data(envelope, privacy=privacy, include_otel_data=include_otel_data)
+    return to_core_span_data(span_data, privacy=privacy, include_otel_data=include_otel_data)
 
 
-class TestInternalEnvelope:
-    def test_envelope_preserves_otel_and_wrapper(self):
+class TestFlatSpanCreation:
+    def test_from_otel_span_returns_flat_span_data(self):
         span = FakeSpan(attributes={"http.method": "GET", "custom.key": "kept"})
-        envelope = from_otel_span(span, stage=Stage.STARTED, hook_type=HookType.HTTP_REQUEST)
-        assert envelope["otel"]["context"]["span_id"] == SPAN_ID  # raw int internally
-        assert envelope["otel"]["attributes"]["custom.key"] == "kept"
-        assert envelope["openbox"]["stage"] == "started"
-        assert envelope["openbox"]["hook_type"] == "http_request"
+        span_data = from_otel_span(span, stage=Stage.STARTED, hook_type=HookType.HTTP_REQUEST)
+        assert span_data["span_id"] == format(SPAN_ID, "016x")
+        assert span_data["trace_id"] == format(TRACE_ID, "032x")
+        assert span_data["attributes"]["custom.key"] == "kept"
+        assert span_data["stage"] == "started"
+        assert span_data["hook_type"] == "http_request"
+        assert "otel" not in span_data
+        assert "openbox" not in span_data
+        assert "data" not in span_data
 
     def test_serialize_readable_span_survives_junk(self):
         result = serialize_readable_span(object())
@@ -62,29 +66,23 @@ class TestWireShape:
         assert wire["end_time"] == span.end_time
         assert wire["duration_ns"] == span.end_time - span.start_time
 
-    def test_nested_envelope_never_reaches_wire(self):
+    def test_nested_envelope_never_exists(self):
         wire, _ = project()
         assert "otel" not in wire
         assert "openbox" not in wire
 
     def test_data_absent_by_default(self):
-        # Flat is the wire contract: no ``data`` blob unless explicitly opted in.
         wire, _ = project(FakeSpan(attributes={"exotic.attr": "yes"}))
         assert "data" not in wire
         assert "metadata" not in wire  # no span-level metadata field exists
 
-    def test_otel_preserved_under_data_when_opted_in(self):
+    def test_include_otel_data_is_noop(self):
         span = FakeSpan(attributes={"exotic.attr": "yes"})
         wire, _ = project(span, include_otel_data=True)
-        assert wire["data"]["otel"]["attributes"]["exotic.attr"] == "yes"
+        assert "data" not in wire
+        assert "otel" not in wire
+        assert wire["attributes"]["exotic.attr"] == "yes"
         assert "metadata" not in wire  # no span-level metadata field exists
-
-    def test_data_blob_ids_are_hex_not_int(self):
-        wire, _ = project(include_otel_data=True)
-        context = wire["data"]["otel"]["context"]
-        assert context["span_id"] == format(SPAN_ID, "016x")
-        assert context["trace_id"] == format(TRACE_ID, "032x")
-        assert wire["data"]["otel"]["parent"]["span_id"] == format(PARENT_ID, "016x")
 
     def test_common_root_fields_always_present(self):
         # Every common field present even with an attribute-less span.

@@ -187,12 +187,12 @@ class TestStageMismatch:
             make_gate(client).preflight(make_hook([{"span_id": "aa" * 8}]))
         assert client.sends == 0
 
-    def test_internal_envelope_stage_shape_supported(self):
+    def test_nested_span_shape_rejected(self):
         client = CountingClient()
         internal = {"otel": {"name": "GET"}, "openbox": {"stage": "started"}}
-        result = make_gate(client).preflight(make_hook([internal]))
-        assert result.verdict.value == "allow"
-        assert client.sends == 1
+        with pytest.raises(ContractError, match="flat Core SpanData"):
+            make_gate(client).preflight(make_hook([internal]))
+        assert client.sends == 0
 
 
 class TestHappyPathsAndAsync:

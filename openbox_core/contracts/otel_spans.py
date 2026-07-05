@@ -1,21 +1,9 @@
-"""Span contracts — Stage, HookType, and the internal OpenBox span envelope.
+"""Span contracts — Stage, HookType, and flat OpenBox hook spans.
 
 OTel spans are the INTERNAL source of truth (there are no fixed
-HttpSpan/DbSpan/... dataclasses). The internal envelope is::
-
-    {
-        "otel": serialize_readable_span(span),   # preserved OTel surface
-        "openbox": {
-            "hook_type": ..., "stage": ..., "activity_context": ...,
-            "fields": {...},        # wrapper-supplied wire root fields
-            "diagnostics": [...],
-        },
-    }
-
-This nested shape is INTERNAL ONLY — it must never be sent as ``spans[]``
-(Core would ignore the unknown keys and deserialize an empty SpanData,
-breaking OPA input, dedup, storage, and approval fingerprints). The wire
-projection lives in ``wire/core_span.py``.
+HttpSpan/DbSpan/... dataclasses), but ``from_otel_span`` returns the flat Core
+``SpanData`` shape immediately. There is no SDK-visible
+``{"otel": ..., "openbox": ...}`` span envelope.
 
 Pure module: span access is DUCK-TYPED (plain getattr) so importing this never
 pulls in opentelemetry — the import-safety harness holds.
@@ -26,6 +14,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from enum import Enum
 from typing import Any
+
+from ..otel.trace_context import format_span_id, format_trace_id
 
 __all__ = [
     "Stage",
@@ -81,6 +71,72 @@ def _attributes_of(obj: Any) -> dict[str, Any]:
         return dict(attributes)
     except Exception:
         return {}
+
+
+# Best-effort semantic attribute mapping: wire field -> OTel keys (new, legacy).
+_SEMANTIC_ATTR_MAP: dict[str, tuple[str, ...]] = {
+    "http_url": ("url.full", "http.url"),
+    "http_method": ("http.request.method", "http.method"),
+    "http_status_code": ("http.response.status_code", "http.status_code"),
+    "db_system": ("db.system.name", "db.system"),
+    "db_name": ("db.namespace", "db.name"),
+    "db_operation": ("db.operation.name", "db.operation"),
+    "db_statement": ("db.query.text", "db.statement"),
+    "server_address": ("server.address", "net.peer.name"),
+    "server_port": ("server.port", "net.peer.port"),
+    "file_path": ("file.path",),
+    "file_mode": ("file.mode",),
+    "file_operation": ("file.operation",),
+    "function": ("code.function.name", "code.function"),
+    "module": ("code.namespace", "code.module"),
+}
+
+_DEFAULT_KIND_BY_HOOK: dict[str, str] = {
+    "http_request": "CLIENT",
+    "db_query": "CLIENT",
+    "file_operation": "INTERNAL",
+    "function_call": "INTERNAL",
+    "llm_call": "CLIENT",
+}
+
+# Family-specific root fields that must exist, null-valued when unavailable, so
+# hook spans have the same flat key contract in memory and on the wire.
+_ROOT_FIELDS_BY_HOOK_TYPE: dict[str, tuple[str, ...]] = {
+    "http_request": (
+        "http_method",
+        "http_url",
+        "http_status_code",
+        "request_headers",
+        "response_headers",
+        "request_body",
+        "response_body",
+    ),
+    "db_query": (
+        "db_system",
+        "db_name",
+        "db_operation",
+        "db_statement",
+        "server_address",
+        "server_port",
+        "rowcount",
+    ),
+    "file_operation": (
+        "file_path",
+        "file_mode",
+        "file_operation",
+        "bytes_read",
+        "bytes_written",
+    ),
+    "function_call": ("function", "module", "args", "result"),
+}
+
+
+def _attr(attributes: Mapping[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        value = attributes.get(key)
+        if value is not None:
+            return value
+    return None
 
 
 def serialize_readable_span(span: Any) -> dict[str, Any]:
@@ -175,29 +231,77 @@ def from_otel_span(
     activity_context: Any = None,
     fields: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build the internal ``{"otel": ..., "openbox": ...}`` span envelope.
+    """Build one flat Core ``SpanData`` dict from an OTel span.
 
     Args:
         span: OTel span (Span/ReadableSpan/NonRecordingSpan — duck-typed).
         stage: started/completed.
         hook_type: Operation category (None for non-hook telemetry spans).
-        activity_context: The bound ActivityContext (or None).
+        activity_context: Accepted for backward-compatible call sites; context is
+            stored on the surrounding event, not inside the span.
         fields: Wrapper-supplied Core root fields (request_body, rowcount,
-            args, ...) that the wire projection merges at the span root —
-            these carry data OTel attributes don't (bodies, results).
+            args, ...) merged at the span root. These carry data OTel attributes
+            don't (bodies, results).
     """
+    _ = activity_context
     stage_value = stage.value if isinstance(stage, Stage) else str(stage)
     hook_value = hook_type.value if isinstance(hook_type, HookType) else hook_type
-    return {
-        "otel": serialize_readable_span(span),
-        "openbox": {
-            "hook_type": hook_value,
-            "stage": stage_value,
-            "activity_context": activity_context,
-            "fields": dict(fields) if fields else {},
-            "diagnostics": [],
-        },
+    otel = serialize_readable_span(span)
+    context = otel.get("context") or {}
+    parent = otel.get("parent") or {}
+    span_id_int = context.get("span_id")
+    trace_id_int = context.get("trace_id")
+    parent_id_int = parent.get("span_id")
+    attributes = dict(otel.get("attributes") or {})
+
+    start_time = otel.get("start_time")
+    end_time = otel.get("end_time")
+    if stage_value == Stage.STARTED.value:
+        end_time = None
+        duration_ns = None
+    else:
+        duration_ns = (
+            end_time - start_time
+            if isinstance(end_time, int) and isinstance(start_time, int)
+            else None
+        )
+
+    wire: dict[str, Any] = {
+        "span_id": format_span_id(span_id_int) if isinstance(span_id_int, int) else "0" * 16,
+        "trace_id": format_trace_id(trace_id_int) if isinstance(trace_id_int, int) else "0" * 32,
+        "parent_span_id": format_span_id(parent_id_int) if isinstance(parent_id_int, int) else None,
+        "name": otel.get("name") or (hook_value or "span"),
+        "kind": otel.get("kind") or _DEFAULT_KIND_BY_HOOK.get(hook_value or "", "INTERNAL"),
+        "stage": stage_value,
+        "start_time": start_time,
+        "end_time": end_time,
+        "duration_ns": duration_ns,
+        "attributes": attributes,
+        "status": otel.get("status") or {"code": "UNSET", "description": None},
+        "events": otel.get("events") or [],
+        "error": None,
     }
+    if hook_value:
+        wire["hook_type"] = hook_value
+
+    for wire_field, attr_keys in _SEMANTIC_ATTR_MAP.items():
+        value = _attr(attributes, attr_keys)
+        if value is not None:
+            wire[wire_field] = value
+
+    for field_name, value in dict(fields or {}).items():
+        if value is not None:
+            wire[field_name] = value
+
+    for field_name in _ROOT_FIELDS_BY_HOOK_TYPE.get(hook_value or "", ()):
+        wire.setdefault(field_name, None)
+
+    if stage_value != Stage.STARTED.value and wire.get("end_time") is None:
+        measured = wire.get("duration_ns")
+        if isinstance(start_time, int) and isinstance(measured, int):
+            wire["end_time"] = start_time + measured
+
+    return wire
 
 
 class OpenBoxSpanAdapter:
