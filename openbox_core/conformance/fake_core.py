@@ -147,7 +147,7 @@ def assert_hook_wire_shape(payload: dict[str, Any]) -> None:
     assert payload.get("span_count") == len(spans)
     for span in spans:
         assert "otel" not in span and "openbox" not in span, (
-            "nested internal envelope leaked to the wire"
+            "nested span envelope leaked to the wire"
         )
         assert "data" not in span, "flat hook spans must not carry a data blob"
         assert "semantic_type" not in span, "semantic_type is computed by Core, not the SDK"

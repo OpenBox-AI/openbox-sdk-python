@@ -19,16 +19,18 @@ TRACE_HEX = re.compile(r"^[0-9a-f]{32}$")
 
 class TestWireIds:
     def test_ids_match_hex_regexes(self):
-        envelope = from_otel_span(FakeSpan(), stage=Stage.STARTED, hook_type=HookType.HTTP_REQUEST)
-        wire, _ = to_core_span_data(envelope)
+        span_data = from_otel_span(FakeSpan(), stage=Stage.STARTED, hook_type=HookType.HTTP_REQUEST)
+        wire, _ = to_core_span_data(span_data)
         assert SPAN_HEX.fullmatch(wire["span_id"])
         assert TRACE_HEX.fullmatch(wire["trace_id"])
         assert SPAN_HEX.fullmatch(wire["parent_span_id"])
         assert "otel" not in wire
 
     def test_no_raw_integer_ids_anywhere_in_wire_payload(self):
-        envelope = from_otel_span(FakeSpan(), stage=Stage.COMPLETED, hook_type=HookType.HTTP_REQUEST)
-        wire, _ = to_core_span_data(envelope)
+        span_data = from_otel_span(
+            FakeSpan(), stage=Stage.COMPLETED, hook_type=HookType.HTTP_REQUEST
+        )
+        wire, _ = to_core_span_data(span_data)
 
         def walk(node, path=""):
             if isinstance(node, dict):

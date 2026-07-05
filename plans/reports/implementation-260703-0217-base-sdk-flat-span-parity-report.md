@@ -20,7 +20,7 @@ shared source of truth; no LangGraph-only shaping.
 | end_time | null started / int completed | null started; **null on OTel-owned completed** | **null started; synthesized start+dur on completed** |
 | duration_ns | null started / int completed | fields override | ✅ (unchanged; parity block backfills end_time) |
 | error | always (null if none) | omitted when None | **always (null)** |
-| `data.otel` | **absent** | **present every span** | **absent on wire (opt-in debug only)** |
+| `data.otel` | **absent** | **present every span** | **absent everywhere** |
 | semantic_type | absent (Core computes) | absent | absent ✅ |
 
 ### HTTP (`http_method, http_url, http_status_code, request_headers, response_headers, request_body, response_body`)
@@ -48,8 +48,8 @@ Parity already good (base matches `io.open`+`builtins.open` patch). AFTER: keys 
 
 ## 2. Changes
 
-- **`wire/core_span.py`** (core): `include_otel_data` default → `False` (flat is the wire contract); common root fields always present (parent_span_id/kind/attributes/error null-safe); per-family root-field templates via `setdefault(None)`; kind fallback per hook type; completed-stage `end_time = start_time + duration_ns` when OTel span not ended.
-- **`wire/evaluate_payload.py`**: emit path passes `include_otel_data=False` explicitly (documented flat contract).
+- **`contracts/otel_spans.py`** (core): `from_otel_span` now returns flat Core `SpanData` directly; common root fields always present (parent_span_id/kind/attributes/error null-safe); per-family root-field templates via `setdefault(None)`; kind fallback per hook type; completed-stage `end_time = start_time + duration_ns` when OTel span not ended.
+- **`wire/core_span.py` / `wire/evaluate_payload.py`**: normalize already-flat spans, strip nested/debug keys defensively, and never emit `data.otel`.
 - **`instrumentation/http.py`**: ported Temporal httpx body capture — best-effort req_body at started + span stash (ContextVar); `install/uninstall_httpx_body_capture()` patches `Client.send`/`AsyncClient.send` for the SINGLE completed event (stream-safe `try/.text`, never consumes streams); httpx OTel response hook removed (no double completed); requests completed retains req_body/req_headers; shared `_is_text_content_type`.
 - **`instrumentation/db.py`**: `_db_fields` gained db_name/server_address/server_port; per-driver metadata extractors (`_sqlalchemy_conn_meta`/`_dbapi_conn_meta`/`_asyncpg_conn_meta`); error path upgraded from hardcoded `"sql"` to real dialect+url.
 - **`instrumentation/manager.py`**: install httpx body capture after OTel httpx; uninstall in reverse order.
@@ -58,7 +58,7 @@ Parity already good (base matches `io.open`+`builtins.open` patch). AFTER: keys 
 ## 3. Tests
 - New `tests/wire/test_flat_hook_contract.py`: 4 families × 2 stages via real `build_evaluate_payload` — no otel/openbox/data, common+family roots present, truncation, started nulls, DB metadata, function null args.
 - New `TestHttpBodyCapture` in `tests/instrumentation/test_http_preflight_block.py`: end-to-end requests + httpx (sync/async) — bodies captured, `Authorization` redacted in real payloads.
-- Updated for new contract: `test_core_span_projection.py` (data opt-in + flat-by-default + common-fields), `test_backend_compat.py` (`has_data` → False), `test_file_function_block.py` (`args` null not absent when `capture_args=False`).
+- Updated for new contract: `test_core_span_projection.py` (flat at creation + common-fields), `test_backend_compat.py` (`has_data` → False), `test_file_function_block.py` (`args` null not absent when `capture_args=False`).
 
 ## 4. Verification
 - Base SDK: **350 passed** (`uv run pytest`), ruff clean, import-safety intact.

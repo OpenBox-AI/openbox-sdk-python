@@ -64,6 +64,10 @@ def _mode_operation(mode: str) -> str:
     return "read"
 
 
+def _file_span_name(mode: str) -> str:
+    return f"file.{_mode_operation(mode)}"
+
+
 def _coerce_path(file: Any) -> str | None:
     """str path for str/bytes/os.PathLike; None for fds/unknowns (pass through)."""
     import os
@@ -177,13 +181,13 @@ class GovernedFile:
 def _governed_open(file, mode="r", *args, **kwargs):
     runtime = get_hook_runtime()
     path = _coerce_path(file)
-    if (
-        runtime is None
-        or getattr(_reentrancy, "active", False)
-        or _should_skip(path)
-    ):
+    if runtime is None or getattr(_reentrancy, "active", False) or _should_skip(path):
         return _original_open(file, mode, *args, **kwargs)
-    span = get_tracer().start_span(f"file {_mode_operation(mode)}")
+    operation = _mode_operation(mode)
+    span = get_tracer().start_span(_file_span_name(mode))
+    span.set_attribute("file.path", path)
+    span.set_attribute("file.mode", mode)
+    span.set_attribute("file.operation", operation)
     _reentrancy.active = True
     try:
         # BLOCK/HALT raises here — the file handle is never created.
@@ -194,7 +198,7 @@ def _governed_open(file, mode="r", *args, **kwargs):
             fields={
                 "file_path": path,
                 "file_mode": mode,
-                "file_operation": _mode_operation(mode),
+                "file_operation": operation,
             },
         )
     finally:

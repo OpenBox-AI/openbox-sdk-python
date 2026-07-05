@@ -94,6 +94,30 @@ class TestHttpxLibrary:
             assert response.status_code == 200
         assert len(fake_core.completed_payloads) == 1
 
+    async def test_prebuilt_async_client_emits_started_and_completed(self):
+        async def handler(request):
+            return httpx.Response(200, json={"ok": True})
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        fake_core = FakeCore({"verdict": "allow"}, {"verdict": "allow"})
+        adapter, store = RaisingHookAdapter(), ContextStore()
+        try:
+            with installed_runtime(fake_core, adapter, store), bound_activity(store):
+                response = await client.post(
+                    "https://api.openai.com/v1/chat/completions", json={"x": 1}
+                )
+            assert response.status_code == 200
+        finally:
+            await client.aclose()
+
+        assert len(fake_core.started_payloads) == 1
+        assert len(fake_core.completed_payloads) == 1
+        started = fake_core.started_payloads[0]["spans"][0]
+        completed = fake_core.completed_payloads[0]["spans"][0]
+        assert started["stage"] == "started"
+        assert completed["stage"] == "completed"
+        assert started["http_url"] == completed["http_url"]
+
 
 class TestHeaderRedaction:
     """Credential headers must never reach governance payloads."""

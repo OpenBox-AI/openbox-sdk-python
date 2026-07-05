@@ -22,3 +22,7 @@ htmlcov/
 .idea/
 .vscode/
 .DS_Store
+
+# Local planning / notes
+plans/
+_notes/

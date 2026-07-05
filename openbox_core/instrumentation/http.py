@@ -11,6 +11,7 @@ themselves (no recursion).
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import logging
 import time
@@ -47,6 +48,7 @@ def _is_text_content_type(content_type: str | None) -> bool:
         return True  # assume text when unspecified
     return any(marker in content_type.lower() for marker in _TEXT_CONTENT_MARKERS)
 
+
 _ignored_url_prefixes: set[str] = set()
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
@@ -70,6 +72,7 @@ def _normalize_url_prefix(url: str) -> str:
     port = parts.port if parts.port is not None else _DEFAULT_PORTS.get(scheme)
     netloc = parts.hostname.lower() + (f":{port}" if port is not None else "")
     return f"{scheme}://{netloc}{parts.path}".rstrip("/")
+
 
 # span_id -> perf_counter at request start (duration for the response hook).
 _HOOK_TIMINGS_MAX = 4096
@@ -175,7 +178,11 @@ def _requests_body(request: Any) -> str | None:
         raw = getattr(request, "body", None)
         if not raw:
             return None
-        return raw.decode("utf-8", errors="ignore") if isinstance(raw, (bytes, bytearray)) else str(raw)
+        return (
+            raw.decode("utf-8", errors="ignore")
+            if isinstance(raw, (bytes, bytearray))
+            else str(raw)
+        )
     except Exception:
         return None
 
@@ -239,18 +246,18 @@ def uninstall_requests() -> None:
 #
 # httpx bodies are NOT available in the OTel hooks: the request hook sees an
 # unread stream and the response hook sees a ResponseInfo whose stream cannot be
-# consumed safely. So the split mirrors the Temporal SDK:
-#   - OTel request hook → started/preflight (best-effort request body) + stash
-#     the httpx CLIENT span for the completed stage.
-#   - a Client.send / AsyncClient.send patch → the SINGLE completed event, with
-#     the full request/response bodies + headers captured after send returns.
-# The OTel response hook is intentionally NOT registered — completed lives in
-# the send patch to avoid a double completed event.
+# consumed safely. The send patch owns both stages so prebuilt/custom clients
+# still get deterministic started + completed governance. The OTel request hook
+# remains as a compatibility fallback for environments where the send patch is
+# not installed.
 
 # Task/thread-local stash: the request hook publishes the httpx CLIENT span here
 # so the send patch (running after that span has ended) attaches the completed
 # event to the SAME span identity.
 _httpx_span_var: contextvars.ContextVar = contextvars.ContextVar("_httpx_span", default=None)
+_httpx_patch_span_var: contextvars.ContextVar = contextvars.ContextVar(
+    "_httpx_patch_span", default=None
+)
 
 
 def _httpx_url(request_info: Any) -> str:
@@ -306,6 +313,8 @@ def _httpx_request_hook(span: Any, request_info: Any) -> None:
     runtime = get_hook_runtime()
     if runtime is None:
         return
+    if _httpx_patch_span_var.get(None) is not None:
+        return
     url = _httpx_url(request_info)
     if should_ignore_url(url):
         return
@@ -322,6 +331,8 @@ def _httpx_request_hook(span: Any, request_info: Any) -> None:
 async def _httpx_async_request_hook(span: Any, request_info: Any) -> None:
     runtime = get_hook_runtime()
     if runtime is None:
+        return
+    if _httpx_patch_span_var.get(None) is not None:
         return
     url = _httpx_url(request_info)
     if should_ignore_url(url):
@@ -394,6 +405,20 @@ def _capture_httpx_request(request: Any) -> tuple[str | None, dict | None]:
     return body, headers
 
 
+def _start_httpx_span(request: Any) -> Any:
+    from opentelemetry import trace
+
+    method = _decode_method(getattr(request, "method", None))
+    url = str(getattr(request, "url", "") or "")
+    span = trace.get_tracer("openbox-core.httpx").start_span(
+        f"HTTP {method}", kind=trace.SpanKind.CLIENT
+    )
+    with contextlib.suppress(Exception):
+        span.set_attribute("http.request.method", method)
+        span.set_attribute("url.full", url)
+    return span
+
+
 def _capture_httpx_response(response: Any) -> tuple[str | None, dict | None]:
     """(response_body, response_headers) — never consumes a stream.
 
@@ -438,7 +463,9 @@ def _httpx_completed_fields(
         "response_body": response_body,
         "response_headers": response_headers,
         "duration_ns": duration_ns,
-        "error": f"HTTP {status_code}" if isinstance(status_code, int) and status_code >= 400 else None,
+        "error": f"HTTP {status_code}"
+        if isinstance(status_code, int) and status_code >= 400
+        else None,
     }
 
 
@@ -464,21 +491,42 @@ def install_httpx_body_capture() -> bool:
         if runtime is None or should_ignore_url(url):
             return _original_httpx_send(self, request, *args, **kwargs)
         request_body, request_headers = _capture_httpx_request(request)
+        span = _start_httpx_span(request)
+        patch_token = _httpx_patch_span_var.set(span)
         start = time.perf_counter()
-        # The OTel request hook fires inside here (preflight). A BLOCK/HALT
-        # raises out — the request never completes and no completed is emitted.
-        response = _original_httpx_send(self, request, *args, **kwargs)
-        duration_ns = int((time.perf_counter() - start) * 1e9)
-        response_body, response_headers = _capture_httpx_response(response)
-        runtime.completed(
-            _pop_httpx_span(),
-            hook_type=HookType.HTTP_REQUEST,
-            fields=_httpx_completed_fields(
-                request, response, duration_ns,
-                request_body, request_headers, response_body, response_headers,
-            ),
-        )
-        return response
+        try:
+            runtime.preflight(
+                span,
+                hook_type=HookType.HTTP_REQUEST,
+                identifier=url,
+                fields={
+                    "http_method": _decode_method(getattr(request, "method", None)),
+                    "http_url": url,
+                    "request_headers": request_headers,
+                    "request_body": request_body,
+                },
+            )
+            response = _original_httpx_send(self, request, *args, **kwargs)
+            duration_ns = int((time.perf_counter() - start) * 1e9)
+            response_body, response_headers = _capture_httpx_response(response)
+            runtime.completed(
+                span,
+                hook_type=HookType.HTTP_REQUEST,
+                fields=_httpx_completed_fields(
+                    request,
+                    response,
+                    duration_ns,
+                    request_body,
+                    request_headers,
+                    response_body,
+                    response_headers,
+                ),
+            )
+            return response
+        finally:
+            _httpx_patch_span_var.reset(patch_token)
+            with contextlib.suppress(Exception):
+                span.end()
 
     async def _patched_async_send(self: Any, request: Any, *args: Any, **kwargs: Any) -> Any:
         runtime = get_hook_runtime()
@@ -486,19 +534,42 @@ def install_httpx_body_capture() -> bool:
         if runtime is None or should_ignore_url(url):
             return await _original_httpx_async_send(self, request, *args, **kwargs)
         request_body, request_headers = _capture_httpx_request(request)
+        span = _start_httpx_span(request)
+        patch_token = _httpx_patch_span_var.set(span)
         start = time.perf_counter()
-        response = await _original_httpx_async_send(self, request, *args, **kwargs)
-        duration_ns = int((time.perf_counter() - start) * 1e9)
-        response_body, response_headers = _capture_httpx_response(response)
-        await runtime.acompleted(
-            _pop_httpx_span(),
-            hook_type=HookType.HTTP_REQUEST,
-            fields=_httpx_completed_fields(
-                request, response, duration_ns,
-                request_body, request_headers, response_body, response_headers,
-            ),
-        )
-        return response
+        try:
+            await runtime.apreflight(
+                span,
+                hook_type=HookType.HTTP_REQUEST,
+                identifier=url,
+                fields={
+                    "http_method": _decode_method(getattr(request, "method", None)),
+                    "http_url": url,
+                    "request_headers": request_headers,
+                    "request_body": request_body,
+                },
+            )
+            response = await _original_httpx_async_send(self, request, *args, **kwargs)
+            duration_ns = int((time.perf_counter() - start) * 1e9)
+            response_body, response_headers = _capture_httpx_response(response)
+            await runtime.acompleted(
+                span,
+                hook_type=HookType.HTTP_REQUEST,
+                fields=_httpx_completed_fields(
+                    request,
+                    response,
+                    duration_ns,
+                    request_body,
+                    request_headers,
+                    response_body,
+                    response_headers,
+                ),
+            )
+            return response
+        finally:
+            _httpx_patch_span_var.reset(patch_token)
+            with contextlib.suppress(Exception):
+                span.end()
 
     httpx.Client.send = _patched_send
     httpx.AsyncClient.send = _patched_async_send
@@ -551,7 +622,11 @@ def _urllib3_body(request_info: Any) -> str | None:
         raw = getattr(request_info, "body", None)
         if not raw:
             return None
-        return raw.decode("utf-8", errors="ignore") if isinstance(raw, (bytes, bytearray)) else str(raw)
+        return (
+            raw.decode("utf-8", errors="ignore")
+            if isinstance(raw, (bytes, bytearray))
+            else str(raw)
+        )
     except Exception:
         return None
 
@@ -593,7 +668,9 @@ def _urllib3_response_hook(span: Any, pool: Any, response: Any) -> None:
     status_code = getattr(response, "status", None)
     body = None
     try:
-        content_type = response.headers.get("content-type", "") if getattr(response, "headers", None) else ""
+        content_type = (
+            response.headers.get("content-type", "") if getattr(response, "headers", None) else ""
+        )
         if _is_text_content_type(content_type):
             raw = getattr(response, "_body", None)
             if isinstance(raw, (bytes, bytearray)):
@@ -612,7 +689,9 @@ def _urllib3_response_hook(span: Any, pool: Any, response: Any) -> None:
             "response_body": body,
             "response_headers": sanitize_headers(getattr(response, "headers", None)),
             "duration_ns": _pop_duration_ns(span),
-            "error": f"HTTP {status_code}" if isinstance(status_code, int) and status_code >= 400 else None,
+            "error": f"HTTP {status_code}"
+            if isinstance(status_code, int) and status_code >= 400
+            else None,
         },
     )
 
@@ -689,7 +768,11 @@ def _urllib_request_hook(span: Any, request: Any) -> None:
     try:
         raw = getattr(request, "data", None)
         if raw:
-            body = raw.decode("utf-8", errors="ignore") if isinstance(raw, (bytes, bytearray)) else str(raw)
+            body = (
+                raw.decode("utf-8", errors="ignore")
+                if isinstance(raw, (bytes, bytearray))
+                else str(raw)
+            )
     except Exception:
         pass
     runtime.preflight(
@@ -721,7 +804,9 @@ def _urllib_response_hook(span: Any, request: Any, response: Any) -> None:
             "http_url": url,
             "http_status_code": status_code,
             "duration_ns": _pop_duration_ns(span),
-            "error": f"HTTP {status_code}" if isinstance(status_code, int) and status_code >= 400 else None,
+            "error": f"HTTP {status_code}"
+            if isinstance(status_code, int) and status_code >= 400
+            else None,
         },
     )
 

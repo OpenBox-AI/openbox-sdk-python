@@ -23,8 +23,12 @@ class TestFileOpen:
         assert not victim.exists()  # the handle was never created
         span = fake_core.started_payloads[0]["spans"][0]
         assert span["hook_type"] == "file_operation"
+        assert span["name"] == "file.write"
         assert span["file_path"] == str(victim)
         assert span["file_operation"] == "write"
+        assert span["attributes"]["file.path"] == str(victim)
+        assert span["attributes"]["file.mode"] == "w"
+        assert span["attributes"]["file.operation"] == "write"
 
     def test_allow_opens_counts_and_reports_on_close(self, tmp_path):
         fake_core = FakeCore({"verdict": "allow"}, {"verdict": "allow"})
@@ -36,14 +40,18 @@ class TestFileOpen:
                 handle.writelines(["a\n", "bb\n"])
         assert target_file.read_text() == "helloa\nbb\n"
         span = fake_core.completed_payloads[0]["spans"][0]
+        assert span["name"] == "file.write"
         assert span["bytes_written"] == 10
         assert span["lines_count"] == 2
         assert span["file_operation"] == "write"
+        assert span["attributes"]["file.operation"] == "write"
 
     def test_read_counting(self, tmp_path):
         fake_core = FakeCore(
-            {"verdict": "allow"}, {"verdict": "allow"},
-            {"verdict": "allow"}, {"verdict": "allow"},
+            {"verdict": "allow"},
+            {"verdict": "allow"},
+            {"verdict": "allow"},
+            {"verdict": "allow"},
         )
         adapter, store = RaisingHookAdapter(), ContextStore()
         source = tmp_path / "data.txt"
@@ -53,8 +61,10 @@ class TestFileOpen:
             with open(source) as handle:
                 assert handle.read() == "payload"
         read_span = fake_core.completed_payloads[-1]["spans"][0]
+        assert read_span["name"] == "file.read"
         assert read_span["bytes_read"] == 7
         assert read_span["file_operation"] == "read"
+        assert read_span["attributes"]["file.operation"] == "read"
 
     def test_stdlib_paths_bypass_governance(self):
         import sysconfig
@@ -89,9 +99,10 @@ class TestFileOpen:
     def test_file_opt_out_still_works(self, tmp_path):
         fake_core = FakeCore()
         adapter, store = RaisingHookAdapter(), ContextStore()
-        with installed_runtime(
-            fake_core, adapter, store, file_enabled=False
-        ), bound_activity(store):
+        with (
+            installed_runtime(fake_core, adapter, store, file_enabled=False),
+            bound_activity(store),
+        ):
             with open(tmp_path / "untracked.txt", "w") as handle:
                 handle.write("x")
         assert fake_core.payloads == []

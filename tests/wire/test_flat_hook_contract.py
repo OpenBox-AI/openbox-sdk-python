@@ -3,8 +3,8 @@
 Exercises the REAL send-path owner (``build_evaluate_payload``) for all four
 hook families × both stages and proves, per family, the Temporal flat contract:
 
-- no top-level ``otel`` / ``openbox`` internal envelope
-- no top-level ``data`` blob (data.otel is opt-in debug, never on the wire)
+    - no top-level ``otel`` / ``openbox`` envelope
+    - no top-level ``data`` blob
 - ``semantic_type`` never set by the SDK (Core computes it)
 - every common root field present (null-valued when absent)
 - every family-specific root field present (null-valued when absent)
@@ -79,17 +79,17 @@ _ALL_STAGES = [Stage.STARTED, Stage.COMPLETED]
 
 
 def emit(hook_type, stage, *, attributes=None, fields=None, privacy=None):
-    """Project a hook span through the real evaluate-body assembler.
+    """Normalize a flat hook span through the real evaluate-body assembler.
 
     Returns ``(payload, span)`` where ``span`` is the single flat wire span.
     """
     span = FakeSpan(attributes=attributes or {})
-    envelope = from_otel_span(span, stage=stage, hook_type=hook_type, fields=fields)
+    span_data = from_otel_span(span, stage=stage, hook_type=hook_type, fields=fields)
     event = hook(
         activity_context=_ACTIVITY_CONTEXT,
         activity_id="act-flat",
         activity_type="flat_activity",
-        spans=[envelope],
+        spans=[span_data],
     )
     payload, _ = build_evaluate_payload(event, privacy=privacy)
     return payload, payload["spans"][0]

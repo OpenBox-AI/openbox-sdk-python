@@ -89,8 +89,7 @@ class EventEnvelope:
             ``ACTIVITY_STARTED`` — the wire type Core accepts).
         payload: Flat wire fields (``workflow_id``, ``run_id``, ...). Serialized
             at the top level of the request body, not nested.
-        spans: Hook span payloads (internal span envelopes until wire
-            projection). Empty for lifecycle events.
+        spans: Flat Core SpanData hook payloads. Empty for lifecycle events.
         hook_trigger: True only for hook evaluations.
         activity_id / activity_type: The bound activity for activity-scoped and
             hook events.
@@ -382,8 +381,7 @@ def hook(
         activity_context: Flat context payload fields (workflow_id, run_id, ...)
             merged at the top level of the wire body.
         activity_id / activity_type: The bound activity identity (required).
-        spans: Non-empty span payloads (internal envelopes; projected to Core
-            ``SpanData`` wire dicts at body assembly).
+        spans: Non-empty flat Core ``SpanData`` payloads.
     """
     if not activity_id or not activity_type:
         raise ValueError(
