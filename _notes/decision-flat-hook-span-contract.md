@@ -12,13 +12,13 @@ Core `SpanData` dict, matching the Temporal legacy hook contract. The base SDK
 is the shared source of truth — framework SDKs (LangGraph, Temporal migration)
 inherit this shape; none reshape spans themselves.
 
-## What "flat" means (enforced in `wire/core_span.py` + `conformance/fake_core.assert_hook_wire_shape`)
+## What "flat" means (enforced in `contracts/otel_spans.py`, `wire/core_span.py`, and `conformance/fake_core.assert_hook_wire_shape`)
 
-- **No `data.otel` blob** on the wire. `to_core_span_data(include_otel_data=...)`
-  defaults to `False`; the OTel preservation blob is opt-in debug ONLY and never
-  on the send path (`wire/evaluate_payload.py` passes `include_otel_data=False`).
-- **No nested `{"otel","openbox"}` envelope** — that is an internal representation
-  (`contracts/otel_spans.from_otel_span`) projected away before send.
+- **No `data.otel` blob** anywhere in hook spans. `to_core_span_data(include_otel_data=...)`
+  keeps the parameter for compatibility, but it is a no-op.
+- **No nested `{"otel","openbox"}` envelope**. `contracts/otel_spans.from_otel_span`
+  returns flat Core `SpanData` directly, so `EventEnvelope.spans` is flat in
+  memory and on the wire.
 - **Common root fields always present** (null when absent): parent_span_id, kind,
   attributes (even `{}`), error — plus span_id/trace_id/name/stage/start_time/
   end_time/duration_ns/status/events/hook_type.
@@ -31,10 +31,10 @@ inherit this shape; none reshape spans themselves.
 
 Temporal's still-correct payloads come from legacy flat hooks that emit no
 `data` blob and always carry the full key set. The base SDK previously appended
-`data.otel` to every hook span and omitted null-valued keys — a real divergence.
-The Go `SpanData` struct tolerates `data` (`omitempty`) so it never failed to
-parse, which hid the drift. Parity target = Temporal's flat shape, so we drop
-`data` and always emit the keys.
+`data.otel` to every hook span, omitted null-valued keys, and kept the
+OTel/OpenBox split as an internal interface — a real divergence. Parity target =
+Temporal's flat shape, so we drop `data`, flatten at span creation, and always
+emit the keys.
 
 ## Verified
 

@@ -17,7 +17,6 @@ from typing import Any
 from ..config import PrivacyConfig
 from ..contracts.events import EventEnvelope
 from ..validation.diagnostics import Diagnostic
-from ..validation.span_normalization import semantic_gap_diagnostics
 from .core_span import to_core_span_data
 
 __all__ = ["build_evaluate_payload", "make_payload_builder"]
@@ -30,24 +29,16 @@ def build_evaluate_payload(
 ) -> tuple[dict[str, Any], list[Diagnostic]]:
     """Assemble the hook evaluate body from a validated hook envelope.
 
-    Spans may be internal ``{"otel", "openbox"}`` envelopes (projected here)
-    or already-flat wire dicts (passed through with gap diagnostics only —
-    supports migration call sites that pre-build flat spans).
+    Spans are flat Core ``SpanData`` dicts in memory. The normalizer enforces
+    the final no-nested/no-data wire shape and applies privacy transforms.
     """
     diagnostics: list[Diagnostic] = []
     wire_spans: list[dict[str, Any]] = []
     for span in event.spans:
-        if isinstance(span, dict) and "otel" in span:
-            # Hook spans go on the wire FLAT — no ``data`` blob (Temporal parity).
-            wire_span, span_diagnostics = to_core_span_data(
-                span, privacy=privacy, include_otel_data=False
-            )
-            diagnostics.extend(span_diagnostics)
-        else:
-            wire_span = dict(span)
-            diagnostics.extend(
-                semantic_gap_diagnostics(wire_span, wire_span.get("hook_type"))
-            )
+        wire_span, span_diagnostics = to_core_span_data(
+            dict(span), privacy=privacy, include_otel_data=False
+        )
+        diagnostics.extend(span_diagnostics)
         wire_spans.append(wire_span)
 
     payload = event.to_payload_dict()

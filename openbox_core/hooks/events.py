@@ -53,12 +53,12 @@ def build_hook_event(
     if not ctx.activity_id or not ctx.activity_type:
         logger.debug("hook skipped: bound context has no activity binding")
         return None
-    envelope = from_otel_span(
+    span_data = from_otel_span(
         span, stage=stage, hook_type=hook_type, activity_context=None, fields=fields
     )
     return hook(
         activity_context=ctx.to_payload_fields(),
         activity_id=ctx.activity_id,
         activity_type=ctx.activity_type,
-        spans=[envelope],
+        spans=[span_data],
     )
