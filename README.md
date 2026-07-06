@@ -23,6 +23,14 @@ Framework SDKs (Temporal, LangGraph, LangChain, DeepAgent, CrewAI) are thin
 adapters: they bind framework lifecycle into `ActivityContext`, emit lifecycle
 events, and translate `EvaluationResult` into native behavior.
 
+## Framework SDK integration
+
+New framework SDK developers and agents should start with
+[the OpenBox Python Framework SDK Integration guide](.github/instructions/openbox-sdk-python.instructions.md).
+It describes how to build a framework SDK on top of this base package without
+reimplementing config, signing, governance gates, hook wire payloads, or
+conformance fixtures.
+
 ## Install
 
 ```bash

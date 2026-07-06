@@ -1,0 +1,77 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  publish:
+    name: Build and Publish
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install hatch
+
+      - name: Verify version matches tag
+        run: |
+          python - <<'PY'
+          import ast
+          import os
+          import pathlib
+          import sys
+          import tomllib
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          if not tag.startswith("v"):
+              print(f"Error: release tag must start with 'v', got {tag!r}")
+              sys.exit(1)
+          tag_version = tag.removeprefix("v")
+
+          pyproject_version = tomllib.loads(
+              pathlib.Path("pyproject.toml").read_text()
+          )["project"]["version"]
+
+          init_tree = ast.parse(pathlib.Path("openbox_core/__init__.py").read_text())
+          package_version = None
+          for node in init_tree.body:
+              if not isinstance(node, ast.Assign):
+                  continue
+              if any(isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets):
+                  package_version = ast.literal_eval(node.value)
+                  break
+
+          if tag_version != pyproject_version:
+              print(
+                  f"Error: tag version ({tag_version}) does not match "
+                  f"pyproject.toml version ({pyproject_version})"
+              )
+              sys.exit(1)
+          if package_version != pyproject_version:
+              print(
+                  f"Error: openbox_core.__version__ ({package_version}) does not "
+                  f"match pyproject.toml version ({pyproject_version})"
+              )
+              sys.exit(1)
+
+          print(f"Version verified: {pyproject_version}")
+          PY
+
+      - name: Build package
+        run: hatch build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
