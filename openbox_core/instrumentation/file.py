@@ -208,9 +208,11 @@ def _governed_open(file, mode="r", *args, **kwargs):
 
 
 def install_file_io() -> bool:
-    """Idempotent open() patch across builtins AND io (guard flag mirrors the
-    Temporal SDK). Patching ``io.open`` is what brings ``pathlib`` file helpers
-    under governance — they bypass ``builtins.open`` entirely."""
+    """Idempotent open() patch across builtins AND io.
+
+    Patching ``io.open`` is what brings ``pathlib`` file helpers under
+    governance — they bypass ``builtins.open`` entirely.
+    """
     global _original_open, _patched_io
     if _original_open is not None:
         return True

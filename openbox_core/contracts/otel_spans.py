@@ -40,7 +40,7 @@ class HookType(str, Enum):
     DB_QUERY = "db_query"
     FILE_OPERATION = "file_operation"
     FUNCTION_CALL = "function_call"
-    LLM_CALL = "llm_call"  # reserved; LLM instrumentation lands when scoped
+    LLM_CALL = "llm_call"  # reserved; disabled until provider hooks are implemented
 
 
 def _span_context_of(span: Any) -> Any:

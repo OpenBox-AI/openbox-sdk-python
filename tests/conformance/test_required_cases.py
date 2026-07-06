@@ -1,4 +1,4 @@
-"""The full required-case conformance matrix (proposal §Phase 7).
+"""The full required-case conformance matrix.
 
 Every case asserts BEHAVIOR — the real operation ran or did not run — plus
 re-asserts the wire shape (hex ids, flat SpanData, no nested otel envelope).

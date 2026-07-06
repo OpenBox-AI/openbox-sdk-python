@@ -1,7 +1,7 @@
 """OpenBox base SDK — unified exception hierarchy.
 
 Pure module: no network, crypto, OTel, logging, or wall-clock imports. Safe to
-import from constrained framework paths (e.g. the Temporal workflow sandbox).
+import from constrained framework paths.
 
 Hierarchy:
     OpenBoxError (base)
@@ -196,7 +196,7 @@ class GovernanceHaltError(OpenBoxError):
     """Raised when governance halts execution (HALT verdict).
 
     HALT is the nuclear option — the framework adapter decides how to stop
-    future work (e.g. Temporal terminates the workflow).
+    future work.
     """
 
     def __init__(self, message: str):
@@ -261,9 +261,8 @@ class ApprovalTimeoutError(OpenBoxError):
 def extract_governance_error(exc: BaseException) -> GovernanceBlockedError | None:
     """Walk an exception chain to find a wrapped GovernanceBlockedError.
 
-    Frameworks and client libraries wrap errors (e.g. Temporal ActivityError →
-    ApplicationError → original). This utility recovers the original
-    GovernanceBlockedError for verdict inspection.
+    Frameworks and client libraries often wrap errors. This utility recovers
+    the original GovernanceBlockedError for verdict inspection.
 
     Args:
         exc: Any exception, potentially wrapping a GovernanceBlockedError.
@@ -281,7 +280,7 @@ def extract_governance_error(exc: BaseException) -> GovernanceBlockedError | Non
         next_exc = getattr(current, "__cause__", None) or getattr(
             current, "__context__", None
         )
-        # Also check framework .cause properties (e.g. Temporal ActivityError.cause)
+        # Also check framework .cause properties.
         if next_exc is None:
             next_exc = getattr(current, "cause", None)
         current = next_exc

@@ -5,7 +5,7 @@ random. Timestamps are RFC3339 strings *passed in* by callers — never generate
 here (``datetime.now`` is forbidden in contracts; the sending layer stamps
 missing timestamps).
 
-Wire rules (mirror the Temporal SDK payloads Core receives today):
+Core wire rules:
 
 - ``EventEnvelope.event_type`` stores the **backend wire type**.
 - Hook evaluations are internally ``EventKind.HOOK`` but serialize as
@@ -13,8 +13,8 @@ Wire rules (mirror the Temporal SDK payloads Core receives today):
 - ``ActivityCompleted`` must not carry non-empty hook spans (validated by the
   strict gate; factories make invalid states hard to build).
 - Handoff payloads require ``from_agent_did`` + ``multi_agent_session_id``
-  (both non-empty); ``to_agent_did`` is deliberately omitted — the receiver is
-  derived server-side from the authenticated signed identity.
+  (both non-empty); ``to_agent_did`` is omitted because the receiver is derived
+  server-side from the authenticated signed identity.
 """
 
 from __future__ import annotations
@@ -173,7 +173,7 @@ def _base_workflow_payload(
     }
     if task_queue is not None:
         payload["task_queue"] = task_queue
-    # Omitted entirely when absent (never a null key) — Temporal parity.
+    # Omitted entirely when absent; never emitted as a null key.
     if multi_agent_session_id:
         payload["multi_agent_session_id"] = multi_agent_session_id
     if extra:
@@ -291,8 +291,8 @@ def activity_completed(
 ) -> EventEnvelope:
     """ActivityCompleted lifecycle event.
 
-    Never carries hook spans. Legacy ``spans=[]``/``span_count=0`` compat noise
-    is not produced here at all; the wire assembler additionally strips it from
+    Never carries hook spans. Empty ``spans``/``span_count=0`` noise is not
+    produced here at all; the wire assembler additionally strips it from
     hand-built payloads (recorded as a diagnostic).
     """
     payload = _base_workflow_payload(
@@ -343,8 +343,8 @@ def handoff(
     """Multi-agent Handoff event.
 
     Both fields are required and non-empty (raises ValueError before any
-    network call). ``to_agent_did`` is deliberately NOT included — the receiver
-    is derived server-side from the authenticated signed identity.
+    network call). ``to_agent_did`` is not included; the receiver is derived
+    server-side from the authenticated signed identity.
     """
     if not from_agent_did or not from_agent_did.strip():
         raise ValueError("handoff: from_agent_did is required and must be non-empty")

@@ -122,8 +122,8 @@ class HookRuntime:
         ``ContractError``s always fail closed — a payload we cannot express to
         Core must not let the operation run ungoverned. Raising the raw error
         would leave frameworks treating it as a generic (often retryable)
-        failure; routing a HALT-shaped result through the adapter reproduces
-        the legacy semantics (non-retryable halt in Temporal).
+        failure; routing a HALT-shaped result through the adapter preserves
+        the non-retryable halt semantics.
         """
         halt = EvaluationResult(
             verdict=Verdict.HALT,
@@ -170,9 +170,7 @@ class HookRuntime:
     def _sync_approval(self, result: EvaluationResult, span: Any) -> bool:
         """Sync approval: adapter-native flow first, core poller fallback.
 
-        An adapter exposing ``handle_approval_sync`` owns the flow (e.g.
-        Temporal raises a RETRYABLE pending error and polls on the next
-        attempt — inline polling would wedge its activity thread). Returning
+        An adapter exposing ``handle_approval_sync`` owns the flow. Returning
         normally means approved. Without that seam, drive the core poller;
         no poller / no approval_id ⇒ fail safe: blocked (the operation must
         not run on an unresolved approval).
@@ -210,7 +208,7 @@ class HookRuntime:
             self._store.mark_activity_aborted(ctx.workflow_id, ctx.activity_id)
         if result.verdict is Verdict.HALT:
             # Expose the halt request; the framework adapter decides how to
-            # stop future work (e.g. Temporal terminates the workflow).
+            # stop future work.
             self._store.request_halt()
 
     # ── Completed (telemetry stage) ───────────────────────────────────────

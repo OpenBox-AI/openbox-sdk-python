@@ -1,9 +1,8 @@
 """Started-hook fail-closed mapping + the sync adapter-approval seam.
 
 A fail-closed evaluation failure must become a framework-native HALT through
-the adapter (raw ``GovernanceAPIError`` reads as a generic retryable failure
-to frameworks like Temporal), and adapters exposing ``handle_approval_sync``
-own sync HITL instead of the inline core poller.
+the adapter, and adapters exposing ``handle_approval_sync`` own sync HITL
+instead of the inline core poller.
 """
 
 import sys
@@ -108,7 +107,7 @@ class TestStartedFailClosed:
 
 
 class _RetryStyleAdapter(RecordingHookAdapter):
-    """Adapter owning sync HITL natively (Temporal-style retryable pending)."""
+    """Adapter owning sync HITL natively."""
 
     class Pending(Exception):
         pass

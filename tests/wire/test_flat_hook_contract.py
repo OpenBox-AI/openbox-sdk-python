@@ -1,7 +1,7 @@
 """Flat hook wire contract — every hook family emits flat Core ``SpanData``.
 
 Exercises the REAL send-path owner (``build_evaluate_payload``) for all four
-hook families × both stages and proves, per family, the Temporal flat contract:
+hook families × both stages and proves the flat wire contract per family:
 
     - no top-level ``otel`` / ``openbox`` envelope
     - no top-level ``data`` blob

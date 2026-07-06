@@ -94,7 +94,7 @@ class GovernanceGate:
         diagnostics = validate_lifecycle(event)
         payload = event.to_payload_dict()
         payload.setdefault("timestamp", rfc3339_now())
-        # Legacy compat noise (spans=[] / span_count=0) never reaches the wire.
+        # Empty span compatibility noise never reaches the wire.
         payload, noise_diagnostics = strip_compat_noise(payload)
         diagnostics.extend(noise_diagnostics)
         return self._finalize_payload(payload, diagnostics)
@@ -151,9 +151,9 @@ class GovernanceGate:
 
         ``exclude_none=False`` is deliberate: started-stage spans carry
         EXPLICIT ``end_time: null`` / ``duration_ns: null`` (Core's non-pointer
-        int64 relies on them) and the Temporal SDK never strips nulls — parity
-        means nulls survive to the wire. Omit-when-absent is handled where
-        payloads are BUILT (keys left out), not by dropping None here.
+        int64 relies on them), so nulls must survive to the wire.
+        Omit-when-absent is handled where payloads are BUILT (keys left out),
+        not by dropping None here.
         """
         payload = to_json_safe(payload, exclude_none=False)
         redact_keys = self._config.privacy.redact_keys

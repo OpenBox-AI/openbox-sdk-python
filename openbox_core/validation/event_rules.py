@@ -4,7 +4,7 @@ The gate is ALWAYS strict for OpenBox event contracts and runtime invariants;
 there is no OBSERVE/SANITIZE/STRICT mode and no way to downgrade these to
 diagnostics. Fail-open applies only to network errors, never here.
 
-Strict failure list (proposal §Phase 2):
+Strict failure list:
 - malformed lifecycle event envelope
 - hook event has ``hook_trigger=false`` (span-bearing but not marked hook)
 - hook event uses the wrong wire event type

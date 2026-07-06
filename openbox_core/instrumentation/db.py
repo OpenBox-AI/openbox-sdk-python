@@ -1,8 +1,5 @@
 """DB wrappers — SQLAlchemy, DB-API (via OTel dbapi CursorTracer), asyncpg.
 
-v1 targets (per the roadmap): SQLAlchemy + DB-API + asyncpg.
-Redis / Mongo / aiohttp are DEFERRED to a later scoped release.
-
 Blocking semantics: the started preflight runs BEFORE the driver executes the
 statement; a BLOCK/HALT raises out of the listener/patch so the query never
 reaches the database.
@@ -45,10 +42,12 @@ def _db_fields(
     server_address: str | None = None,
     server_port: int | None = None,
 ) -> dict:
-    """Assemble DB wire root fields. ``db_name``/``server_address``/
-    ``server_port`` are populated per driver so the flat SpanData carries the
-    same connection metadata the Temporal legacy hooks emit (null when a driver
-    does not expose them; the projection keeps the keys present regardless)."""
+    """Assemble DB wire root fields.
+
+    ``db_name``/``server_address``/``server_port`` are populated per driver
+    when available; the projection keeps the keys present even when a driver
+    exposes no value.
+    """
     op = operation
     if op is None and statement:
         op = statement.strip().split(" ", 1)[0].upper() if statement.strip() else None

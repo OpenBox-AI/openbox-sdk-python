@@ -41,7 +41,7 @@ def extract_span_context(span: Any) -> tuple[str, str, str | None]:
     """(span_id_hex16, trace_id_hex32, parent_span_id_hex16 | None).
 
     Handles NonRecordingSpan, mocks, and missing attributes safely — degraded
-    ids become all-zero hex (matching the Temporal SDK), never an exception.
+    ids become all-zero hex, never an exception.
     """
     span_context = _span_context_of(span)
     try:

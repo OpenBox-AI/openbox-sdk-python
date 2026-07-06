@@ -2,7 +2,7 @@
 
 Pure, import-safe module: no network, crypto, OTel, logging, wall-clock, or
 random. Strict dataclass constructors AND loose ``from_dict()`` parsers are
-both public during migration — framework SDKs may hold raw dicts today.
+both public so callers can work with typed values or raw backend dicts.
 
 Parsing preserves ``raw`` so nothing the backend sent is ever lost, and stays
 tolerant of unknown keys (field-shape drift from Core must not crash SDKs).
@@ -107,11 +107,11 @@ class EvaluationResult:
     """Response from a governance evaluation.
 
     ``guardrails`` and ``guardrails_result`` are the SAME object —
-    ``guardrails_result`` is a read-only alias kept for Temporal-parity call
-    sites; there is deliberately no way for the two to diverge.
+    ``guardrails_result`` is a read-only compatibility alias; there is no way
+    for the two to diverge.
 
-    The three fields Temporal never parsed (``fallback_used``, ``diagnostics``,
-    ``raw``) default to falsy values so strict construction stays terse.
+    Optional transport/diagnostic fields default to falsy values so strict
+    construction stays terse.
     """
 
     verdict: Verdict
@@ -133,7 +133,7 @@ class EvaluationResult:
 
     @property
     def guardrails_result(self) -> GuardrailsResult | None:
-        """Alias of ``guardrails`` (same object, Temporal-parity name)."""
+        """Alias of ``guardrails`` (same object)."""
         return self.guardrails
 
     @property
@@ -198,9 +198,7 @@ class ApprovalResult:
     """Normalized HITL approval-poll response.
 
     Decision-source precedence: **``action`` wins over ``verdict``** when both
-    are present. NOTE this is a deliberate BEHAVIOR CHANGE vs the Temporal SDK
-    (which prefers ``verdict``); the Temporal migration regression-gates it
-    before adopting this parser.
+    are present.
 
     When NEITHER field is present, ``verdict`` is ``None`` (pending-unknown) —
     never auto-ALLOW. Expired approvals block unless the backend explicitly
@@ -215,10 +213,10 @@ class ApprovalResult:
     expired: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
 
-    # Known decision vocabulary for approvals (v1.1 values + v1.0 aliases).
+    # Known decision vocabulary for approvals (current values + accepted aliases).
     # Anything OUTSIDE this set parses to None (pending) — the evaluate-path
-    # leniency of Verdict.from_string (unknown -> ALLOW, legacy parity) is
-    # HAZARDOUS at the human-approval trust boundary and is not used here.
+    # leniency of Verdict.from_string (unknown -> ALLOW) is too loose at the
+    # human-approval trust boundary and is not used here.
     _DECISION_VOCABULARY = frozenset(
         {
             "allow",
@@ -245,8 +243,7 @@ class ApprovalResult:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ApprovalResult:
         action = data.get("action")
-        # Empty/whitespace action is ABSENT — it must not shadow the verdict
-        # field (the legacy ``verdict or action`` fallthrough had this right).
+        # Empty/whitespace action is absent; it must not shadow ``verdict``.
         if not isinstance(action, str) or not action.strip():
             action = None
         verdict_source = action if action is not None else data.get("verdict")
@@ -255,7 +252,7 @@ class ApprovalResult:
             verdict=verdict,
             action=action,
             reason=data.get("reason"),
-            # Normalize legacy ``id`` → ``approval_id``.
+            # Normalize ``id`` → ``approval_id``.
             approval_id=data.get("approval_id") or data.get("id"),
             approval_expiration_time=data.get("approval_expiration_time"),
             expired=bool(data.get("expired", False)),
@@ -281,7 +278,7 @@ class ApprovalResult:
         """True while the approval decision is still outstanding.
 
         Absent verdict/action (``None``) is pending — never auto-ALLOW.
-        REQUIRE_APPROVAL and CONSTRAIN keep polling (Temporal-parity).
+        REQUIRE_APPROVAL and CONSTRAIN keep polling.
         """
         if self.expired:
             return False

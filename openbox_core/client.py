@@ -15,9 +15,6 @@ Transport rules:
       ``fallback_used=True`` (callers can tell it apart from a policy ALLOW).
     * fail_closed: raise ``GovernanceAPIError`` (adapters map to native
       halt/block behavior).
-  NOTE vs Temporal: Temporal historically returned ``None``/HALT-verdict on
-  error paths; the base SDK standardizes on the shapes above and the Temporal
-  migration adapts its call sites (regression-gated).
 """
 
 from __future__ import annotations

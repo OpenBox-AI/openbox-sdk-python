@@ -19,15 +19,15 @@ def test_build_sdk_identifier_defaults_to_base_python_package_version():
 
 def test_build_sdk_identifier_accepts_framework_engine_and_minor_version():
     assert (
-        build_sdk_identifier(engine="Temporal", language="Python", version="v1.1")
-        == "openbox-temporal-python-v1.1"
+        build_sdk_identifier(engine="Framework", language="Python", version="v1.1")
+        == "openbox-framework-python-v1.1"
     )
 
 
 def test_build_sdk_identifier_preserves_valid_full_identifier():
     assert (
-        build_sdk_identifier(version="openbox-langgraph-python-v1.2.3")
-        == "openbox-langgraph-python-v1.2.3"
+        build_sdk_identifier(version="openbox-custom-python-v1.2.3")
+        == "openbox-custom-python-v1.2.3"
     )
 
 
@@ -44,12 +44,12 @@ def test_build_auth_headers_sends_standard_sdk_identifier():
     headers = build_auth_headers(
         "obx_test_a",
         "1.2.3",
-        sdk_engine="langgraph",
+        sdk_engine="custom",
         sdk_language="python",
     )
 
-    assert headers["X-OpenBox-SDK-Version"] == "openbox-langgraph-python-v1.2.3"
-    assert headers["User-Agent"] == "OpenBox-SDK/openbox-langgraph-python-v1.2.3"
+    assert headers["X-OpenBox-SDK-Version"] == "openbox-custom-python-v1.2.3"
+    assert headers["User-Agent"] == "OpenBox-SDK/openbox-custom-python-v1.2.3"
 
 
 def test_evaluation_client_uses_configured_sdk_identifier():
@@ -63,13 +63,13 @@ def test_evaluation_client_uses_configured_sdk_identifier():
         "https://core.test",
         "obx_test_a",
         sdk_version="1.2.3",
-        sdk_engine="langgraph",
+        sdk_engine="custom",
         transport=httpx.MockTransport(handler),
     )
 
     client.evaluate({"event_type": "WorkflowStarted"})
 
-    assert seen["sdk"] == "openbox-langgraph-python-v1.2.3"
+    assert seen["sdk"] == "openbox-custom-python-v1.2.3"
 
 
 def test_runtime_passes_configured_sdk_identifier_to_default_client():
@@ -78,10 +78,10 @@ def test_runtime_passes_configured_sdk_identifier_to_default_client():
             api_url="https://core.test",
             api_key="obx_test_a",
             sdk_version="1.1",
-            sdk_engine="temporal",
+            sdk_engine="custom",
         )
     )
 
     assert runtime.client._sdk_version == "1.1"
-    assert runtime.client._sdk_engine == "temporal"
+    assert runtime.client._sdk_engine == "custom"
     assert runtime.client._sdk_language == "python"

@@ -134,8 +134,8 @@ def assert_hook_wire_shape(payload: dict[str, Any]) -> None:
 
     - ``event_type=ActivityStarted`` + ``hook_trigger=true`` + non-empty spans
     - hex-string ids (regex, not truthiness)
-    - flat ``SpanData`` dicts — the nested ``otel``/``openbox`` envelope AND the
-      opt-in ``data`` blob must never reach the wire (Temporal parity)
+    - flat ``SpanData`` dicts — the nested ``otel``/``openbox`` envelope and any
+      opt-in ``data`` blob must never reach the wire
     - every common root field present (``stage``/``hook_type``/``error``/…)
     - every family-specific root field present for the span's ``hook_type``
     - ``semantic_type`` never set by the SDK (Core computes it)

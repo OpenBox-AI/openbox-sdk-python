@@ -20,10 +20,7 @@ class ActivityContext:
 
     Immutable — per-operation deltas go in ``metadata`` or a freshly bound
     context, never mutation. Framework-specific extras that have no first-class
-    field here (e.g. Temporal's ``attempt``/``source``) belong in ``metadata``.
-
-    ``agent_name``/``agent_role``/``session_id`` are new optional fields the
-    Temporal SDK does not populate today.
+    field here belong in ``metadata``.
     """
 
     workflow_id: str | None = None
@@ -42,9 +39,8 @@ class ActivityContext:
     def to_payload_fields(self) -> dict[str, Any]:
         """Flat wire fields for hook payload assembly (omit-when-absent).
 
-        ``metadata`` entries merge at the top level LAST — mirroring how the
-        Temporal hook payload copies its stored context dict (which carries
-        extras like ``attempt``) — but never overwrite first-class fields.
+        ``metadata`` entries merge at the top level last, but never overwrite
+        first-class fields.
         """
         fields_map = {
             "workflow_id": self.workflow_id,

@@ -3,7 +3,7 @@
 Asserts that importing ``openbox_core`` and each ``openbox_core.contracts.*``
 module in a fresh subprocess does NOT pull in heavy/side-effectful modules:
 httpx, cryptography, requests, or any OTel instrumentation. Constrained
-framework paths (e.g. the Temporal workflow sandbox) depend on this.
+framework paths depend on this.
 """
 
 from __future__ import annotations
