@@ -1,9 +1,8 @@
 """Non-fail span diagnostics — best-effort degradations that never reject.
 
-Missing semantic attributes, legacy compat noise, and privacy transforms are
+Missing semantic attributes, compatibility noise, and privacy transforms are
 DIAGNOSTICS, not failures. Only malformed envelopes/stages/bindings are strict
-(see event_rules.py). The proposal is explicit: never reject or drop a span
-because semantic attributes are missing.
+(see event_rules.py). Semantic gaps never reject or drop a span.
 """
 
 from __future__ import annotations
@@ -37,12 +36,11 @@ SEMANTIC_FIELDS_BY_HOOK_TYPE: dict[str, tuple[str, ...]] = {
 
 
 def strip_compat_noise(payload: dict[str, Any]) -> tuple[dict[str, Any], list[Diagnostic]]:
-    """Remove legacy ``spans=[]``/``span_count=0`` from a lifecycle wire payload.
+    """Remove ``spans=[]``/``span_count=0`` from a lifecycle wire payload.
 
-    ActivityCompleted historically carried empty ``spans``/``span_count=0``;
-    Core ignores them but they are contract noise. Removal is recorded as a
-    diagnostic — it is NOT a configurable mode. Non-empty spans are not touched
-    here (they are a strict failure upstream).
+    Core ignores these empty fields, but they are contract noise. Removal is
+    recorded as a diagnostic — it is NOT a configurable mode. Non-empty spans
+    are not touched here (they are a strict failure upstream).
     """
     diagnostics: list[Diagnostic] = []
     removed: list[str] = []
@@ -58,7 +56,7 @@ def strip_compat_noise(payload: dict[str, Any]) -> tuple[dict[str, Any], list[Di
             Diagnostic(
                 level=DiagnosticLevel.INFO,
                 code=COMPAT_NOISE_REMOVED,
-                message=f"Removed legacy compatibility noise before send: {removed}",
+                message=f"Removed compatibility noise before send: {removed}",
                 detail={"removed": removed},
             )
         )

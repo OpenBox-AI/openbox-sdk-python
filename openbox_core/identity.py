@@ -1,17 +1,15 @@
 """AgentIdentity — AIP DID validation and Ed25519 request signing.
 
-Reproduces the Temporal SDK signing contract BYTE-FOR-BYTE. The canonical
-string (must match Core ``agent.go:93``)::
+Implements the Core signed-request contract. The canonical string (must match
+Core ``agent.go:93``)::
 
     UPPER(METHOD)\nPATH\nTIMESTAMP\nNONCE\nBODY_SHA256_HEX
 
-Contract invariants (verified against the live Temporal signer):
+Contract invariants:
 
 - The signing TIMESTAMP is ``datetime.now(timezone.utc).isoformat()`` —
-  it KEEPS ``+00:00`` and never uses ``Z``. (The event-payload timestamp is a
-  different field with a different format.) NOTE: the CrewAI SDK diverges here
-  (``Z`` + ``uuid4`` nonce); the base SDK matches Temporal — the divergence is
-  documented by a cross-check test, not unified.
+  it KEEPS ``+00:00`` and never uses ``Z``. The event-payload timestamp is a
+  different field with a different format.
 - NONCE is ``secrets.token_urlsafe(24)``.
 - Signature is standard padded base64 of the Ed25519 signature over the
   canonical string, ASCII-decoded.

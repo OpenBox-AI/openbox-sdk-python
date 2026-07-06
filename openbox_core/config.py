@@ -4,15 +4,12 @@ Resolution order (highest wins):
 
 1. explicit arguments
 2. SDK-specific environment variables via ``env_prefix`` (e.g.
-   ``OPENBOX_TEMPORAL_API_KEY`` for ``env_prefix="OPENBOX_TEMPORAL"``)
+   ``OPENBOX_FRAMEWORK_API_KEY`` for ``env_prefix="OPENBOX_FRAMEWORK"``)
 3. global ``OPENBOX_*`` environment variables
 4. defaults
 5. validation and normalization
 
-This layered ``env_prefix``/``OPENBOX_*`` order is NEW versus the Temporal SDK
-(which resolves everything at ``initialize()`` with no prefix). Temporal's
-``GovernanceConfig`` fields map onto the nested groups here so the migration
-can shim without losing options:
+Common framework configuration fields map onto the nested groups here:
 
     skip_workflow_types / skip_activity_types / skip_signals /
     enforce_task_queues / send_start_event / send_activity_start_event  -> gate
@@ -90,7 +87,7 @@ class InstrumentationConfig:
     # re-entrancy guard passes through evaluation-time opens.
     file_enabled: bool = True
     function_enabled: bool = True
-    llm_enabled: bool = False  # LLM instrumentation lands when scoped
+    llm_enabled: bool = False  # Reserved; disabled until provider hooks are implemented.
     install_opentelemetry: bool = True
     preflight_enabled: bool = True
     completed_telemetry_enabled: bool = True
@@ -100,8 +97,8 @@ class InstrumentationConfig:
 class GateConfig:
     """Event-level gate toggles (which lifecycle events are evaluated).
 
-    NOTE: there is deliberately NO gate *mode* here — the gate is always
-    strict for event/runtime contracts. These are emission toggles only.
+    Gate mode is not configurable: event/runtime contracts are always strict.
+    These fields control only which events are emitted.
     """
 
     skip_workflow_types: set[str] = field(default_factory=set)
@@ -118,7 +115,7 @@ class PrivacyConfig:
     """Redaction/truncation applied BEFORE signing."""
 
     redact_keys: set[str] = field(default_factory=set)
-    max_body_size: int = 65536  # chars; Temporal default
+    max_body_size: int = 65536  # chars
 
 
 @dataclass
@@ -162,7 +159,7 @@ class OpenBoxConfig:
         """Layered resolution: explicit > env_prefix > OPENBOX_* > defaults.
 
         Args:
-            env_prefix: SDK-specific env namespace (e.g. ``OPENBOX_TEMPORAL``).
+            env_prefix: SDK-specific env namespace (e.g. ``OPENBOX_FRAMEWORK``).
             environ: Environment mapping (defaults to ``os.environ``; injectable
                 for tests).
             validate: Run validation/normalization (step 5). Disable only in

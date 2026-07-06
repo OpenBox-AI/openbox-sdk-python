@@ -38,7 +38,7 @@ class TestActivityScope:
         assert store.current_activity_context() is None
 
     def test_scope_resets_on_exception(self):
-        # The Temporal leak fix: reset lives in finally, not the happy path.
+        # Reset lives in finally, not the happy path.
         store = ContextStore()
         with pytest.raises(RuntimeError):
             with activity_scope(CTX, store=store):

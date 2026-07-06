@@ -2,8 +2,8 @@
 
 Owns the poll loop (interval/backoff), expiry handling, and timeout budget —
 but imposes NO framework retry strategy: adapters that drive their own
-approval UX (e.g. Temporal's native activity-retry HITL loop) call
-``client.poll_approval`` directly and skip this module entirely.
+approval UX call ``client.poll_approval`` directly and skip this module
+entirely.
 
 Terminal semantics:
 - allow-shaped        -> return the ApprovalResult (approved)

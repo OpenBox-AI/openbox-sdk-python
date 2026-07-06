@@ -2,9 +2,8 @@
 
 The adapter is the ONE seam where governance verdicts become framework-native
 effects. There is exactly one path: wrapper -> hook runtime -> adapter.
-Framework SDKs override the callbacks (e.g. Temporal maps block/halt to
-ApplicationError types and drives its HITL retry loop); the default
-``CoreAdapter`` raises the core error types directly.
+Framework SDKs override the callbacks; the default ``CoreAdapter`` raises the
+core error types directly.
 """
 
 from __future__ import annotations
@@ -42,9 +41,8 @@ class FrameworkAdapter(Protocol):
 
         Adapters may ALSO define a plain-sync ``handle_approval_sync(result)``
         (not part of the required protocol): when present, sync hook paths
-        delegate to it instead of driving the core inline poller — frameworks
-        whose HITL is retry-based (e.g. Temporal) raise their native retryable
-        pending error there.
+        delegate to it instead of driving the core inline poller. Frameworks
+        with retry-based HITL can raise their native pending error there.
         """
         ...
 

@@ -15,9 +15,7 @@ here converts it to the canonical integer so both sides always agree.
 Leak safety: callers MUST wrap bind/reset in try/finally (use
 ``activity_scope``); ``unregister_trace`` runs on activity completion and
 ``clear()`` on runtime close so long-lived workers never grow the map
-unbounded or serve stale correlations. (The current Temporal SDK resets in
-``_handle_completion()`` — NOT in a finally — and leaks context on error;
-this store fixes that by construction.)
+unbounded or serve stale correlations.
 """
 
 from __future__ import annotations
@@ -46,9 +44,9 @@ __all__ = [
 def canonical_trace_key(trace_id: int | str) -> int:
     """Normalize any accepted trace-id representation to the canonical key.
 
-    The canonical key is the raw OTel ``SpanContext.trace_id`` INTEGER (what
-    Temporal registers and looks up today). Hex strings convert through here
-    so the wire representation can never end up on only one side of a lookup.
+    The canonical key is the raw OTel ``SpanContext.trace_id`` INTEGER. Hex
+    strings convert through here so the wire representation can never end up
+    on only one side of a lookup.
     """
     if isinstance(trace_id, bool):  # bool is an int subclass — reject explicitly
         raise TypeError("trace_id must be an int or hex string, got bool")
@@ -191,8 +189,7 @@ def activity_scope(
 ) -> Iterator[ActivityContext]:
     """Bind a context (and optional trace registration) with GUARANTEED reset.
 
-    The try/finally here is the fix for the Temporal context-leak: reset and
-    trace cleanup run even when the framework operation raises.
+    Reset and trace cleanup run even when the framework operation raises.
     """
     target = store if store is not None else _default_store
     token = target.bind(ctx)
