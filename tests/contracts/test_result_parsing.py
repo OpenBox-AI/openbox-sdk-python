@@ -93,8 +93,7 @@ class TestEvaluationResult:
         assert EvaluationResult.from_dict({}).verdict is Verdict.ALLOW
 
     def test_verdict_precedes_action_for_evaluation(self):
-        # EvaluationResult keeps Temporal's verdict-first order (the
-        # action-precedence change applies to ApprovalResult only).
+        # EvaluationResult stays verdict-first; ApprovalResult is action-first.
         result = EvaluationResult.from_dict({"verdict": "block", "action": "continue"})
         assert result.verdict is Verdict.BLOCK
 

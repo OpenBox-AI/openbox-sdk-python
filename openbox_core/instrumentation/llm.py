@@ -1,3 +1,3 @@
-"""LLM provider instrumentation — deferred; lands when scoped by product decision."""
+"""LLM provider instrumentation placeholder."""
 
 __all__: list[str] = []

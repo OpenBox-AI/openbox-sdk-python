@@ -1,7 +1,6 @@
 """to_core_span_data — normalize flat Core ``SpanData`` wire spans.
 
-Wire rules (verified against the Go struct + the payloads the Temporal SDK's
-legacy flat hooks emit):
+Wire rules:
 
 - Ids are HEX STRINGS: span_id 16, trace_id 32, parent_span_id 16 chars.
   Raw integer OTel ids must never be sent.
@@ -12,7 +11,7 @@ legacy flat hooks emit):
 - The COMMON root fields (span_id, trace_id, parent_span_id, name, kind,
   stage, start_time, end_time, duration_ns, attributes, status, events,
   hook_type, error) are ALWAYS present — null-valued when absent, never
-  omitted — matching the legacy flat contract.
+  omitted — matching the flat hook contract.
 - Each hook family's own root fields (http_*/db_*/file_*/function) are ALSO
   always present for that family (null when the wrapper/attributes did not
   supply them). ``attributes`` carries OTel-native attributes ONLY.
@@ -76,8 +75,7 @@ def to_core_span_data(
     _ = include_otel_data
     diagnostics: list[Diagnostic] = []
     wire = dict(span)
-    # Never let old nested/debug shapes leak forward, even if a migration caller
-    # hands them to this normalizer.
+    # Never let nested/debug shapes leak forward.
     wire.pop("otel", None)
     wire.pop("openbox", None)
     wire.pop("data", None)
@@ -114,15 +112,14 @@ def to_core_span_data(
             wire[field_name] = value
 
     # Guarantee every family-specific root key exists (explicit null if neither
-    # attributes nor the wrapper supplied it) — the legacy flat hooks always
-    # emit the full family key set; Core's ``omitempty`` tolerates the nulls.
+    # attributes nor the wrapper supplied it); the flat hook contract emits the
+    # full family key set, and Core's ``omitempty`` tolerates the nulls.
     for field_name in _ROOT_FIELDS_BY_HOOK_TYPE.get(hook_type or "", ()):
         wire.setdefault(field_name, None)
 
-    # Completed-stage timing parity: OTel-owned spans (httpx/requests) are not
-    # ended when the response hook fires, so ``end_time`` is null even though a
-    # duration was measured. Reconstruct it from start_time + duration so a
-    # completed span always carries a real end_time (Temporal sets now_ns).
+    # OTel-owned HTTP spans are not always ended when the response hook fires,
+    # so ``end_time`` may be null even though a duration was measured.
+    # Reconstruct it from start_time + duration for completed spans.
     if wire.get("stage") != "started" and wire.get("end_time") is None:
         start_time = wire.get("start_time")
         measured = wire.get("duration_ns")

@@ -202,8 +202,8 @@ def _requests_response_hook(span: Any, request: Any, response: Any) -> None:
             body = response.text
     except Exception:
         pass
-    # Completed retains the request body/headers alongside the response
-    # (Temporal parity — the completed stage carries the full exchange).
+    # Completed retains the request body/headers alongside the response so the
+    # stage carries the full exchange.
     runtime.completed(
         span,
         hook_type=HookType.HTTP_REQUEST,
@@ -656,9 +656,9 @@ def _urllib3_response_hook(span: Any, pool: Any, response: Any) -> None:
     runtime = get_hook_runtime()
     if runtime is None:
         return
-    # The response hook has no request_info; the URL degrades to the host root
-    # (matching legacy). Read only ALREADY-BUFFERED content (``_body``, set when
-    # preload_content=True) so a live streaming response is never consumed.
+    # The response hook has no request_info; the URL degrades to the host root.
+    # Read only ALREADY-BUFFERED content (``_body``, set when preload_content=True)
+    # so a live streaming response is never consumed.
     scheme = getattr(pool, "scheme", "http")
     host = getattr(pool, "host", "unknown")
     port = getattr(pool, "port", None)

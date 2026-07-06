@@ -5,8 +5,6 @@ from openbox_core.contracts.results import ApprovalResult, Verdict
 
 class TestDecisionPrecedence:
     def test_action_wins_over_verdict(self):
-        # Deliberate behavior change vs Temporal (verdict-first there);
-        # regression-gated before the Temporal SDK adopts this parser.
         result = ApprovalResult.from_dict({"verdict": "block", "action": "continue"})
         assert result.verdict is Verdict.ALLOW
         assert result.action == "continue"

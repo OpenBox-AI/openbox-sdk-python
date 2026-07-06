@@ -3,8 +3,7 @@
 Python < 3.12 does NOT copy ContextVars into default-executor threads: the
 HTTP/DB instrumentors then create spans with trace_id=0 in the worker thread
 and the hook runtime can't find the bound ActivityContext. Installing a
-context-propagating executor fixes both. (Ported from the Temporal SDK's
-context_propagation.py; live issue on Python 3.11, the pinned floor.)
+context-propagating executor fixes both on Python 3.11, the pinned floor.
 """
 
 from __future__ import annotations
