@@ -58,6 +58,9 @@ class OpenBoxRuntime:
             timeout_seconds=config.timeout_seconds,
             on_api_error=config.on_api_error,
             identity=config.load_identity(),
+            sdk_version=config.sdk_version,
+            sdk_engine=config.sdk_engine,
+            sdk_language=config.sdk_language,
         )
         self.gate = GovernanceGate(
             self.client,
