@@ -34,6 +34,7 @@ from .errors import (
     map_signing_error,
 )
 from .identity import AgentIdentity, prepare_signed_request
+from .sdk_version import DEFAULT_SDK_ENGINE, DEFAULT_SDK_LANGUAGE
 
 __all__ = [
     "EVALUATE_PATH",
@@ -104,6 +105,9 @@ class EvaluationClient:
         timeout_seconds: float = 30.0,
         on_api_error: str = "fail_open",
         identity: AgentIdentity | None = None,
+        sdk_version: str | None = None,
+        sdk_engine: str = DEFAULT_SDK_ENGINE,
+        sdk_language: str = DEFAULT_SDK_LANGUAGE,
         transport: Any = None,
         async_transport: Any = None,
     ):
@@ -113,6 +117,8 @@ class EvaluationClient:
             timeout_seconds: Per-request timeout.
             on_api_error: "fail_open" (default) or "fail_closed".
             identity: Loaded AgentIdentity for signed requests (None = unsigned).
+            sdk_version/sdk_engine/sdk_language: Values used to build
+                X-OpenBox-SDK-Version as openbox-{engine}-{language}-v{version}.
             transport/async_transport: Optional httpx transports (tests inject
                 ``httpx.MockTransport`` here; production leaves them None).
         """
@@ -123,6 +129,9 @@ class EvaluationClient:
         self._timeout = timeout_seconds
         self._on_api_error = on_api_error
         self._identity = identity
+        self._sdk_version = sdk_version
+        self._sdk_engine = sdk_engine
+        self._sdk_language = sdk_language
         self._transport = transport
         self._async_transport = async_transport
         self._sync_client: Any = None
@@ -161,7 +170,14 @@ class EvaluationClient:
 
     def _prepared(self, method: str, path: str, payload: dict | None) -> tuple[str, dict, bytes]:
         headers, body = prepare_signed_request(
-            method, path, payload, api_key=self._api_key, identity=self._identity
+            method,
+            path,
+            payload,
+            api_key=self._api_key,
+            identity=self._identity,
+            sdk_version=self._sdk_version,
+            sdk_engine=self._sdk_engine,
+            sdk_language=self._sdk_language,
         )
         return f"{self._api_url}{path}", headers, body
 

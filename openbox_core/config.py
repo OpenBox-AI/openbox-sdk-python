@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .errors import OpenBoxAuthError, OpenBoxConfigError, OpenBoxInsecureURLError
+from .sdk_version import DEFAULT_SDK_ENGINE, DEFAULT_SDK_LANGUAGE
 
 __all__ = [
     "GLOBAL_ENV_PREFIX",
@@ -136,6 +137,9 @@ class OpenBoxConfig:
     agent_name: str | None = None
     agent_did: str | None = None
     agent_private_key: str | None = field(default=None, repr=False)  # never in repr
+    sdk_version: str | None = None
+    sdk_engine: str = DEFAULT_SDK_ENGINE
+    sdk_language: str = DEFAULT_SDK_LANGUAGE
     env_prefix: str | None = None
     hitl: HitlConfig = field(default_factory=HitlConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)

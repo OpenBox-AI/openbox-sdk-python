@@ -35,6 +35,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .errors import OpenBoxConfigError
+from .sdk_version import (
+    DEFAULT_SDK_ENGINE,
+    DEFAULT_SDK_LANGUAGE,
+    build_sdk_identifier,
+)
 from .serialization import serialize_body
 
 __all__ = [
@@ -156,14 +161,23 @@ def build_canonical_string(
     return "\n".join([method.upper(), path, timestamp, nonce, body_sha256])
 
 
-def build_auth_headers(api_key: str, sdk_version: str | None = None) -> dict[str, str]:
+def build_auth_headers(
+    api_key: str,
+    sdk_version: str | None = None,
+    *,
+    sdk_engine: str = DEFAULT_SDK_ENGINE,
+    sdk_language: str = DEFAULT_SDK_LANGUAGE,
+) -> dict[str, str]:
     """Standard bearer auth headers for governance API calls."""
-    if sdk_version is None:
-        from . import __version__ as sdk_version
+    sdk_identifier = build_sdk_identifier(
+        engine=sdk_engine,
+        language=sdk_language,
+        version=sdk_version,
+    )
     return {
         "Authorization": f"Bearer {api_key}",
-        "User-Agent": f"OpenBox-SDK/{sdk_version}",
-        "X-OpenBox-SDK-Version": sdk_version,
+        "User-Agent": f"OpenBox-SDK/{sdk_identifier}",
+        "X-OpenBox-SDK-Version": sdk_identifier,
     }
 
 
@@ -175,6 +189,8 @@ def prepare_signed_request(
     api_key: str,
     identity: AgentIdentity | None,
     sdk_version: str | None = None,
+    sdk_engine: str = DEFAULT_SDK_ENGINE,
+    sdk_language: str = DEFAULT_SDK_LANGUAGE,
     _timestamp: str | None = None,
     _nonce: str | None = None,
 ) -> tuple[dict[str, str], bytes]:
@@ -195,7 +211,12 @@ def prepare_signed_request(
         never ``json=`` — so the transmitted bytes match the hashed bytes.
     """
     body_bytes = serialize_body(payload)
-    headers = build_auth_headers(api_key, sdk_version)
+    headers = build_auth_headers(
+        api_key,
+        sdk_version,
+        sdk_engine=sdk_engine,
+        sdk_language=sdk_language,
+    )
 
     if identity is not None:
         body_sha256 = hashlib.sha256(body_bytes).hexdigest()
