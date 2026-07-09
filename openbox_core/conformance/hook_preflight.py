@@ -39,10 +39,14 @@ class RecordingHookAdapter:
         self.completed_results: list[EvaluationResult] = []
         self.completed_contexts: list[ActivityContext | None] = []
         self.approvals: list[EvaluationResult] = []
+        self.approval_contexts: list[ActivityContext | None] = []
         self.approve_next = True
 
-    async def handle_approval(self, result: EvaluationResult) -> None:
+    async def handle_approval(
+        self, result: EvaluationResult, context: ActivityContext | None = None
+    ) -> None:
         self.approvals.append(result)
+        self.approval_contexts.append(context)
         if not self.approve_next:
             raise ApprovalRejectedError("rejected by conformance adapter")
 

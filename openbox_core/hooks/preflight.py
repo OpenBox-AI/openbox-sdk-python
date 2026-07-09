@@ -18,6 +18,7 @@ import logging
 from collections.abc import Mapping
 from typing import Any, NoReturn
 
+from ..adapters.base import adapter_accepts_context
 from ..approvals import ApprovalPoller
 from ..contracts.events import EventEnvelope
 from ..contracts.otel_spans import HookType, Stage
@@ -39,10 +40,13 @@ class HookRuntime:
         self._store = runtime.context_store
         self._gate = runtime.gate
         self._adapter = runtime.adapter
-        # Decide ONCE whether the adapter's completed callback takes ``context``,
-        # by inspecting its signature — so a genuine TypeError raised inside the
+        # Decide ONCE whether the adapter's callbacks take ``context``, by
+        # inspecting their signatures — so a genuine TypeError raised inside a
         # callback body is never mistaken for an arity mismatch and swallowed.
-        self._completed_accepts_context = self._adapter_accepts_context()
+        self._completed_accepts_context = adapter_accepts_context(
+            self._adapter.on_completed_hook_result
+        )
+        self._approval_accepts_context = adapter_accepts_context(self._adapter.handle_approval)
         hitl = runtime.config.hitl
         self._sync_poller: ApprovalPoller | None = None
         if hitl.enabled:
@@ -163,7 +167,14 @@ class HookRuntime:
             )
         if verdict.requires_approval():
             # Adapter drives its native approval flow; returning ⇒ approved.
-            await self._adapter.handle_approval(result)
+            # Core omits the workflow/run/activity IDs from the evaluate
+            # response, so hand the span-resolved context for the poll.
+            if self._approval_accepts_context:
+                await self._adapter.handle_approval(
+                    result, context=resolve_context(self._store, span)
+                )
+            else:
+                await self._adapter.handle_approval(result)
             return True
         return True
 
@@ -258,24 +269,6 @@ class HookRuntime:
             logger.warning("completed-hook telemetry failed", exc_info=True)
             return
         self._after_completed(result, span)
-
-    def _adapter_accepts_context(self) -> bool:
-        """True when the adapter's ``on_completed_hook_result`` accepts a
-        ``context`` argument (checked once, by signature — not by catching a
-        TypeError from the call, which would mask real errors)."""
-        import inspect
-
-        callback = getattr(self._adapter, "on_completed_hook_result", None)
-        if callback is None:
-            return False
-        try:
-            params = inspect.signature(callback).parameters
-        except (TypeError, ValueError):
-            return False
-        # Accepts context via an explicit param or **kwargs.
-        return "context" in params or any(
-            p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
-        )
 
     def _after_completed(self, result: EvaluationResult, span: Any) -> None:
         if result.verdict.should_stop():
