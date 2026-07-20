@@ -8,7 +8,8 @@ core error types directly.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from ..contracts.results import EvaluationResult
 from ..errors import (
@@ -24,7 +25,7 @@ if TYPE_CHECKING:
     from ..approvals import ApprovalPoller
     from ..contracts.context import ActivityContext
 
-__all__ = ["FrameworkAdapter", "CoreAdapter"]
+__all__ = ["FrameworkAdapter", "CoreAdapter", "adapter_accepts_context"]
 
 
 @runtime_checkable
@@ -33,16 +34,27 @@ class FrameworkAdapter(Protocol):
 
     name: str
 
-    async def handle_approval(self, result: EvaluationResult) -> None:
+    async def handle_approval(
+        self, result: EvaluationResult, context: ActivityContext | None = None
+    ) -> None:
         """Drive the framework's approval flow for REQUIRE_APPROVAL.
 
         Return normally when approved; raise the framework's native rejection/
         expiry error otherwise. Called BEFORE the real operation runs.
 
-        Adapters may ALSO define a plain-sync ``handle_approval_sync(result)``
-        (not part of the required protocol): when present, sync hook paths
-        delegate to it instead of driving the core inline poller. Frameworks
-        with retry-based HITL can raise their native pending error there.
+        ``context`` carries the workflow/run/activity IDs the approval poll
+        needs: Core's evaluate response does NOT echo them, so they cannot be
+        recovered from ``result.raw``. The runtime passes the originating
+        ``ActivityContext`` (lifecycle events build one from the event).
+        Optional — an adapter defined as ``handle_approval(self, result)`` still
+        conforms; the runtime passes ``context`` only when the signature accepts
+        it (see :func:`adapter_accepts_context`).
+
+        Adapters may ALSO define a plain-sync ``handle_approval_sync(result,
+        context)`` (not part of the required protocol): when present, sync hook
+        paths delegate to it instead of driving the core inline poller.
+        Frameworks with retry-based HITL can raise their native pending error
+        there.
         """
         ...
 
@@ -82,17 +94,16 @@ class CoreAdapter:
     def __init__(self, approval_poller: ApprovalPoller | None = None):
         self._poller = approval_poller
 
-    async def handle_approval(self, result: EvaluationResult) -> None:
+    async def handle_approval(
+        self, result: EvaluationResult, context: ActivityContext | None = None
+    ) -> None:
         if self._poller is None or not result.approval_id:
             raise ApprovalRejectedError(
                 "REQUIRE_APPROVAL verdict but no approval flow is configured — "
                 "failing safe (operation not run)"
             )
-        approval = await self._poller.await_decision(
-            result.raw.get("workflow_id", ""),
-            result.raw.get("run_id", ""),
-            result.raw.get("activity_id", ""),
-        )
+        workflow_id, run_id, activity_id = _approval_poll_ids(result, context)
+        approval = await self._poller.await_decision(workflow_id, run_id, activity_id)
         if approval.allow_shaped:
             return
         if approval.expired:
@@ -121,3 +132,50 @@ class CoreAdapter:
         raise GovernanceBlockedError(
             result.verdict, result.reason or "Blocked by governance policy"
         )
+
+
+def _approval_poll_ids(
+    result: EvaluationResult, context: ActivityContext | None
+) -> tuple[str, str, str]:
+    """Resolve the (workflow_id, run_id, activity_id) the approval poll sends.
+
+    Core's evaluate response does not echo them, so the originating
+    ``ActivityContext`` is authoritative; ``result.raw`` is only a fallback for
+    a caller that predates the ``context`` argument (it is empty in real Core
+    traffic).
+    """
+    raw = result.raw
+    if context is None:
+        return (
+            raw.get("workflow_id", ""),
+            raw.get("run_id", ""),
+            raw.get("activity_id", ""),
+        )
+    return (
+        context.workflow_id or raw.get("workflow_id", ""),
+        context.run_id or raw.get("run_id", ""),
+        context.activity_id or raw.get("activity_id", ""),
+    )
+
+
+def adapter_accepts_context(callback: Callable[..., Any] | None) -> bool:
+    """True when an adapter callback accepts a ``context`` argument (an explicit
+    parameter or ``**kwargs``).
+
+    Checked by signature so a genuine ``TypeError`` raised inside the callback
+    body is never mistaken for an arity mismatch and silently dropped. Lets the
+    runtime stay backward-compatible with adapters written against the older
+    ``handle_approval(self, result)`` / ``on_completed_hook_result(self,
+    result)`` signatures.
+    """
+    import inspect
+
+    if callback is None:
+        return False
+    try:
+        params = inspect.signature(callback).parameters
+    except (TypeError, ValueError):
+        return False
+    return "context" in params or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )

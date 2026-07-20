@@ -4,10 +4,12 @@ import httpx
 import pytest
 
 from openbox_core.adapters.base import CoreAdapter, FrameworkAdapter
+from openbox_core.approvals import ApprovalPoller
 from openbox_core.client import EvaluationClient
 from openbox_core.config import OpenBoxConfig
+from openbox_core.contracts.context import ActivityContext
 from openbox_core.contracts.events import workflow_started
-from openbox_core.contracts.results import EvaluationResult, Verdict
+from openbox_core.contracts.results import ApprovalResult, EvaluationResult, Verdict
 from openbox_core.errors import (
     ApprovalRejectedError,
     GovernanceBlockedError,
@@ -43,6 +45,30 @@ class RecordingAdapter:
 
     def on_completed_hook_result(self, result):
         self.completed.append(result)
+
+
+class _IdRecordingClient:
+    """Fake client recording the (workflow_id, run_id, activity_id) each async
+    poll is called with, then returning an allow-shaped decision."""
+
+    def __init__(self, seen: list[tuple[str, str, str]]):
+        self._seen = seen
+
+    async def apoll_approval(self, workflow_id, run_id, activity_id):
+        self._seen.append((workflow_id, run_id, activity_id))
+        return ApprovalResult.from_dict({"action": "allow"})
+
+
+class _ContextRecordingAdapter(RecordingAdapter):
+    """RecordingAdapter whose handle_approval ACCEPTS and records ``context``."""
+
+    def __init__(self):
+        super().__init__()
+        self.approval_contexts: list[ActivityContext | None] = []
+
+    async def handle_approval(self, result, context=None):
+        self.approvals.append(result)
+        self.approval_contexts.append(context)
 
 
 def make_runtime(response_json, adapter=None):
@@ -91,6 +117,17 @@ class TestLifecycleDelegation:
         assert result.verdict is Verdict.REQUIRE_APPROVAL
         assert len(adapter.approvals) == 1
 
+    async def test_require_approval_threads_event_context(self):
+        # A context-accepting adapter receives the event's workflow/run IDs —
+        # Core's evaluate response never echoes them, so the runtime must supply
+        # them from the originating event.
+        adapter = _ContextRecordingAdapter()
+        runtime = make_runtime({"verdict": "require_approval", "approval_id": "app-1"}, adapter)
+        await runtime.aevaluate_lifecycle(workflow_started(**WF))
+        ctx = adapter.approval_contexts[0]
+        assert ctx is not None
+        assert (ctx.workflow_id, ctx.run_id) == ("wf-1", "r-1")
+
     def test_sync_require_approval_returned_to_caller(self):
         adapter = RecordingAdapter()
         runtime = make_runtime({"verdict": "require_approval"}, adapter)
@@ -116,6 +153,29 @@ class TestCoreAdapterDefaults:
             await adapter.handle_approval(
                 EvaluationResult(verdict=Verdict.REQUIRE_APPROVAL, approval_id="a")
             )
+
+    async def test_core_adapter_polls_with_context_ids_not_raw(self):
+        # raw is EMPTY, exactly as a real Core evaluate response is — the poll
+        # IDs must come from the context the runtime threads in.
+        seen: list[tuple[str, str, str]] = []
+        poller = ApprovalPoller(_IdRecordingClient(seen), poll_interval_seconds=0.001)
+        adapter = CoreAdapter(approval_poller=poller)
+        result = EvaluationResult(verdict=Verdict.REQUIRE_APPROVAL, approval_id="a")
+        ctx = ActivityContext(workflow_id="wf-9", run_id="run-9", activity_id="act-9")
+        await adapter.handle_approval(result, context=ctx)
+        assert seen == [("wf-9", "run-9", "act-9")]
+
+    async def test_core_adapter_approval_falls_back_to_raw_without_context(self):
+        seen: list[tuple[str, str, str]] = []
+        poller = ApprovalPoller(_IdRecordingClient(seen), poll_interval_seconds=0.001)
+        adapter = CoreAdapter(approval_poller=poller)
+        result = EvaluationResult(
+            verdict=Verdict.REQUIRE_APPROVAL,
+            approval_id="a",
+            raw={"workflow_id": "wf-raw", "run_id": "run-raw", "activity_id": "act-raw"},
+        )
+        await adapter.handle_approval(result)
+        assert seen == [("wf-raw", "run-raw", "act-raw")]
 
     def test_protocol_conformance(self):
         assert isinstance(CoreAdapter(), FrameworkAdapter)
