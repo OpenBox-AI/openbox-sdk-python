@@ -17,10 +17,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from .adapters.base import CoreAdapter, FrameworkAdapter
+from .adapters.base import CoreAdapter, FrameworkAdapter, adapter_accepts_context
 from .client import EvaluationClient
 from .config import OpenBoxConfig
 from .context import ContextStore, default_context_store
+from .contracts.context import ActivityContext
 from .contracts.events import EventEnvelope
 from .contracts.results import EvaluationResult, Verdict
 from .errors import GuardrailsValidationError
@@ -51,6 +52,9 @@ class OpenBoxRuntime:
     ):
         self.config = config
         self.adapter: FrameworkAdapter = adapter if adapter is not None else CoreAdapter()
+        # Decide ONCE whether the adapter's handle_approval accepts ``context``
+        # (older adapters take only ``result``) — see adapter_accepts_context.
+        self._approval_accepts_context = adapter_accepts_context(self.adapter.handle_approval)
         self.context_store = context_store if context_store is not None else default_context_store()
         self.client = client if client is not None else EvaluationClient(
             config.api_url,
@@ -104,7 +108,14 @@ class OpenBoxRuntime:
         result = await self.gate.aevaluate(event)
         if result.verdict.requires_approval():
             self._check_guardrails(result)
-            await self.adapter.handle_approval(result)
+            # Core omits workflow/run/activity IDs from the evaluate response, so
+            # build the approval context from the originating event for the poll.
+            if self._approval_accepts_context:
+                await self.adapter.handle_approval(
+                    result, context=_approval_context_from_event(event)
+                )
+            else:
+                await self.adapter.handle_approval(result)
             return result
         return self._enforce_lifecycle(result, drive_approval=False)
 
@@ -136,3 +147,25 @@ class OpenBoxRuntime:
         self.uninstall_instrumentation()
         self.context_store.clear()
         await self.client.aclose()
+
+
+def _approval_context_from_event(event: EventEnvelope) -> ActivityContext:
+    """Build the approval context for a lifecycle event.
+
+    ``workflow_id`` / ``run_id`` live in the flat wire ``payload``;
+    ``activity_id`` is a first-class envelope field (a workflow-level approval
+    legitimately has none). Core's evaluate response omits all three, so the
+    poll must be built from the originating event — see
+    ``CoreAdapter.handle_approval``.
+    """
+    payload = event.payload
+
+    def _s(value: Any) -> str | None:
+        return value if isinstance(value, str) else None
+
+    activity_id = event.activity_id if event.activity_id is not None else _s(payload.get("activity_id"))
+    return ActivityContext(
+        workflow_id=_s(payload.get("workflow_id")),
+        run_id=_s(payload.get("run_id")),
+        activity_id=activity_id,
+    )
