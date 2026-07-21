@@ -10,6 +10,7 @@ tolerant of unknown keys (field-shape drift from Core must not crash SDKs).
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -19,6 +20,9 @@ __all__ = [
     "GuardrailsResult",
     "EvaluationResult",
     "ApprovalResult",
+    "RetryPlan",
+    "RetryDirective",
+    "handle_retryable_block",
 ]
 
 
@@ -102,6 +106,87 @@ class GuardrailsResult:
         return [r.get("reason", "") for r in self.reasons if r.get("reason")]
 
 
+# Sentinel distinguishing an absent ``retry_plan`` field from a present JSON ``null``.
+# ``dict.get("retry_plan")`` would collapse both to None; membership via this sentinel does not.
+_MISSING = object()
+
+# JS Number.MAX_SAFE_INTEGER. Integral numbers must fit within +/- this bound so ``new_input`` can
+# never silently change across FE, backend, Core, and Python (json.loads yields arbitrary-precision
+# ``int`` and ``float('inf')``, both broader than JS).
+_MAX_SAFE_INTEGER = 2**53 - 1
+
+
+def _numbers_are_safe(value: Any) -> bool:
+    """Every number (recursively) must be finite and, if integral, within the JS-safe range.
+
+    ``bool`` is a subclass of ``int`` but is not a number here; a nested bool is a plain leaf
+    (top-level ``new_input`` booleans are rejected separately by :func:`_parse_retry_plan`).
+    """
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, int):
+        return abs(value) <= _MAX_SAFE_INTEGER
+    if isinstance(value, float):
+        if math.isinf(value) or math.isnan(value):
+            return False
+        if value.is_integer():
+            return abs(value) <= _MAX_SAFE_INTEGER
+        return True
+    if isinstance(value, dict):
+        return all(_numbers_are_safe(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return all(_numbers_are_safe(v) for v in value)
+    return True
+
+
+@dataclass
+class RetryPlan:
+    """Optional remediation hint carried on a BLOCK verdict (policy-produced or admin-retry).
+
+    ``new_input`` may be null | str | number | list | dict (boolean rejected). A present
+    ``new_input`` of ``None`` is a valid plan (retry with the original input) and is distinct
+    from an absent ``retry_plan`` field.
+    """
+
+    new_input: Any = None
+
+
+@dataclass
+class RetryDirective:
+    """Caller-facing view of a retryable BLOCK, surfaced only via :func:`handle_retryable_block`.
+
+    It is a remediation hint, not proof that a retry was evaluated or executed.
+    """
+
+    new_input: Any = None
+    governance_event_id: str | None = None
+    reason: str | None = None
+
+
+def _parse_retry_plan(container: dict[str, Any]) -> RetryPlan | None:
+    """Parse an optional ``retry_plan`` from a result dict against the frozen wire contract.
+
+    Returns a plan only when ``retry_plan`` is present, is a dict whose ONLY key is ``new_input``,
+    and ``new_input`` is null/str/number/list/dict (boolean rejected) with every number finite and,
+    if integral, within the JS-safe integer range. An absent field, a JSON ``null`` field, or any
+    contract violation yields ``None`` (treated as absent — never an error). A present
+    ``new_input`` of ``None`` is preserved as a valid plan.
+    """
+    plan = container.get("retry_plan", _MISSING)
+    if plan is _MISSING or not isinstance(plan, dict):
+        return None
+    # Exactly the single key new_input (also guarantees new_input is present, not merely null).
+    if set(plan.keys()) != {"new_input"}:
+        return None
+    new_input = plan["new_input"]
+    # bool is a subclass of int — reject a boolean new_input BEFORE the number check.
+    if isinstance(new_input, bool):
+        return None
+    if not _numbers_are_safe(new_input):
+        return None
+    return RetryPlan(new_input=new_input)
+
+
 @dataclass
 class EvaluationResult:
     """Response from a governance evaluation.
@@ -130,6 +215,7 @@ class EvaluationResult:
     fallback_used: bool = False  # True when fail-open produced this result
     diagnostics: list[Any] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
+    retry_plan: RetryPlan | None = None  # Optional BLOCK remediation hint; None = absent
 
     @property
     def guardrails_result(self) -> GuardrailsResult | None:
@@ -180,6 +266,7 @@ class EvaluationResult:
             fallback_used=bool(data.get("fallback_used", False)),
             diagnostics=data.get("diagnostics") or [],
             raw=dict(data),
+            retry_plan=_parse_retry_plan(data),
         )
 
     @classmethod
@@ -212,6 +299,7 @@ class ApprovalResult:
     approval_expiration_time: str | None = None
     expired: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
+    retry_plan: RetryPlan | None = None  # Present only on an admin-retry BLOCK
 
     # Known decision vocabulary for approvals (current values + accepted aliases).
     # Anything OUTSIDE this set parses to None (pending) — the evaluate-path
@@ -257,6 +345,7 @@ class ApprovalResult:
             approval_expiration_time=data.get("approval_expiration_time"),
             expired=bool(data.get("expired", False)),
             raw=dict(data),
+            retry_plan=_parse_retry_plan(data),
         )
 
     @property
@@ -285,3 +374,44 @@ class ApprovalResult:
         if self.verdict is None:
             return True
         return self.verdict in (Verdict.REQUIRE_APPROVAL, Verdict.CONSTRAIN)
+
+
+def handle_retryable_block(
+    result: EvaluationResult | ApprovalResult,
+) -> RetryDirective | None:
+    """Opt-in, pure inspector: surface a retry directive from a retryable BLOCK.
+
+    Returns a :class:`RetryDirective` ONLY for ``verdict == Verdict.BLOCK`` with a present, valid
+    ``retry_plan``. Returns ``None`` for plain BLOCK, every non-BLOCK verdict (including HALT),
+    a pending/``None`` verdict, and an expired :class:`ApprovalResult`.
+
+    This does NOT change enforcement: importing or exposing it never auto-retries. A caller must
+    invoke it explicitly, and it makes no claim that a replacement was evaluated or executed.
+
+    The gate is deliberately ``verdict == Verdict.BLOCK`` — NOT ``is_blocking()`` /
+    ``verdict.should_stop()``, which also match HALT (and, for approvals, expired results) and would
+    violate the wire-contract invariant that HALT always strips the plan.
+    """
+    # A stale/expired poll result must not surface a directive, even if verdict == BLOCK.
+    if isinstance(result, ApprovalResult) and result.expired:
+        return None
+    # ApprovalResult.verdict may be None (pending); the != BLOCK comparison handles that. Using
+    # getattr keeps this safe if a caller passes an unexpected object.
+    if getattr(result, "verdict", None) != Verdict.BLOCK:
+        return None
+
+    plan = result.retry_plan
+    if plan is None:
+        return None
+
+    # governance_event_id is typed on EvaluationResult; ApprovalResult carries it only in raw.
+    if isinstance(result, EvaluationResult):
+        governance_event_id = result.governance_event_id
+    else:
+        governance_event_id = result.raw.get("governance_event_id") or result.raw.get("id")
+
+    return RetryDirective(
+        new_input=plan.new_input,
+        governance_event_id=governance_event_id,
+        reason=result.reason,
+    )
