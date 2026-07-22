@@ -195,6 +195,13 @@ class TestStrictWireParsing:
         assert result.patch is not None
         assert result.patch.new_input == {"attempt": 2}
 
+    def test_preserves_retry_plan_parsing(self):
+        result = EvaluationResult.from_wire(
+            b'{"verdict":"block","retry_plan":{"new_input":{"attempt":2}}}'
+        )
+        assert result.retry_plan is not None
+        assert result.retry_plan.new_input == {"attempt": 2}
+
 
 class TestGuardrailsResult:
     def test_from_dict_defaults(self):

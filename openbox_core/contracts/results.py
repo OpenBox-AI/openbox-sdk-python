@@ -259,6 +259,77 @@ def _valid_wire_constraints(value: Any) -> bool:
     )
 
 
+_WIRE_VERDICTS = {value.value: value for value in Verdict}
+_WIRE_ACTIONS = {
+    **_WIRE_VERDICTS,
+    "continue": Verdict.ALLOW,
+    "stop": Verdict.HALT,
+    "require-approval": Verdict.REQUIRE_APPROVAL,
+    "request_approval": Verdict.REQUIRE_APPROVAL,
+    "request-approval": Verdict.REQUIRE_APPROVAL,
+}
+
+
+def _wire_error() -> ContractError:
+    return ContractError("Malformed governance response", code="RESPONSE_INVALID")
+
+
+def _strict_wire_object(body: bytes) -> dict[str, Any]:
+    if not isinstance(body, bytes):
+        raise _wire_error()
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError
+            result[key] = value
+        return result
+
+    def finite_float(value: str) -> float:
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError
+        return result
+
+    def reject_constant(_: str) -> None:
+        raise ValueError
+
+    try:
+        value = json.loads(
+            body.decode("utf-8", errors="strict"),
+            object_pairs_hook=unique_object,
+            parse_constant=reject_constant,
+            parse_float=finite_float,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
+        raise _wire_error() from None
+    if not isinstance(value, dict):
+        raise _wire_error()
+    return value
+
+
+def _wire_decision(
+    data: dict[str, Any], field_name: str, vocabulary: dict[str, Verdict]
+) -> Verdict | None:
+    if field_name not in data:
+        return None
+    value = data[field_name]
+    if not isinstance(value, str) or value not in vocabulary:
+        raise _wire_error()
+    return vocabulary[value]
+
+
+def _valid_wire_constraints(value: Any) -> bool:
+    if isinstance(value, dict):
+        return True
+    if not isinstance(value, list):
+        return False
+    return all(isinstance(item, str) for item in value) or all(
+        isinstance(item, dict) for item in value
+    )
+
+
 @dataclass
 class EvaluationResult:
     """Response from a governance evaluation.
