@@ -1,10 +1,15 @@
 """EvaluationResult / GuardrailsResult / Verdict parsing tests."""
 
+import json
+
+import pytest
+
 from openbox_core.contracts.results import (
     EvaluationResult,
     GuardrailsResult,
     Verdict,
 )
+from openbox_core.errors import ContractError
 
 
 class TestVerdict:
@@ -115,6 +120,80 @@ class TestEvaluationResult:
         assert result.verdict is Verdict.ALLOW
         assert result.fallback_used is True
         assert result.reason == "network unreachable"
+
+    def test_from_dict_remains_tolerant_and_action_compatible(self):
+        result = EvaluationResult.from_dict(
+            {"verdict": "unknown", "action": "allow", "fallback_used": 1}
+        )
+        assert result.verdict is Verdict.ALLOW
+        assert result.action == "continue"
+        assert result.fallback_used is True
+
+
+class TestStrictWireParsing:
+    @pytest.mark.parametrize(
+        "body",
+        [
+            b"\xff",
+            b"not-json",
+            b"[]",
+            b"{}",
+            b'{"verdict":"unknown"}',
+            b'{"action":"unknown"}',
+            b'{"verdict":"allow","action":"stop"}',
+            b'{"verdict":"allow","fallback_used":0}',
+            b'{"verdict":"allow","fallback_used":null}',
+            b'{"verdict":"constrain","constraints":1}',
+            b'{"verdict":"constrain","constraints":["sandbox",{}]}',
+            b'{"verdict":"allow","guardrails_result":[]}',
+            b'{"verdict":"allow","verdict":"block"}',
+            b'{"verdict":"allow","risk_score":NaN}',
+            b'{"verdict":"allow","risk_score":Infinity}',
+            b'{"verdict":"allow","risk_score":1e9999}',
+        ],
+    )
+    def test_rejects_malformed_success_body(self, body):
+        with pytest.raises(ContractError, match="Malformed governance response"):
+            EvaluationResult.from_wire(body)
+
+    @pytest.mark.parametrize(
+        ("field", "value", "expected"),
+        [
+            ("verdict", "allow", Verdict.ALLOW),
+            ("verdict", "constrain", Verdict.CONSTRAIN),
+            ("verdict", "require_approval", Verdict.REQUIRE_APPROVAL),
+            ("action", "continue", Verdict.ALLOW),
+            ("action", "stop", Verdict.HALT),
+            ("action", "require-approval", Verdict.REQUIRE_APPROVAL),
+            ("action", "request_approval", Verdict.REQUIRE_APPROVAL),
+            ("action", "block", Verdict.BLOCK),
+        ],
+    )
+    def test_accepts_current_and_legacy_decisions(self, field, value, expected):
+        result = EvaluationResult.from_wire(f'{{"{field}":"{value}"}}'.encode())
+        assert result.verdict is expected
+
+    @pytest.mark.parametrize(
+        "constraints",
+        [{"max_rows": 3}, [{"kind": "limit"}], ["run_in_sandbox"], []],
+    )
+    def test_accepts_current_constraint_shapes(self, constraints):
+        body = json.dumps({"verdict": "constrain", "constraints": constraints}).encode()
+        assert EvaluationResult.from_wire(body).constraints == constraints
+
+    def test_preserves_unknown_fields_without_changing_action_compatibility(self):
+        result = EvaluationResult.from_wire(
+            b'{"verdict":"allow","action":"allow","future":{"x":1}}'
+        )
+        assert result.action == "continue"
+        assert result.raw["future"] == {"x": 1}
+
+    def test_preserves_retry_plan_parsing(self):
+        result = EvaluationResult.from_wire(
+            b'{"verdict":"block","retry_plan":{"new_input":{"attempt":2}}}'
+        )
+        assert result.retry_plan is not None
+        assert result.retry_plan.new_input == {"attempt": 2}
 
 
 class TestGuardrailsResult:

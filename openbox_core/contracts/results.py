@@ -1,19 +1,20 @@
 """Result contracts — Verdict, GuardrailsResult, EvaluationResult, ApprovalResult.
 
 Pure, import-safe module: no network, crypto, OTel, logging, wall-clock, or
-random. Strict dataclass constructors AND loose ``from_dict()`` parsers are
-both public so callers can work with typed values or raw backend dicts.
-
-Parsing preserves ``raw`` so nothing the backend sent is ever lost, and stays
-tolerant of unknown keys (field-shape drift from Core must not crash SDKs).
+random. Successful Core responses use strict ``from_wire()`` parsing;
+``from_dict()`` remains a loose compatibility parser for explicit callers.
+Both preserve unknown keys in ``raw``.
 """
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
+
+from ..errors import ContractError
 
 __all__ = [
     "Verdict",
@@ -187,6 +188,77 @@ def _parse_retry_plan(container: dict[str, Any]) -> RetryPlan | None:
     return RetryPlan(new_input=new_input)
 
 
+_WIRE_VERDICTS = {value.value: value for value in Verdict}
+_WIRE_ACTIONS = {
+    **_WIRE_VERDICTS,
+    "continue": Verdict.ALLOW,
+    "stop": Verdict.HALT,
+    "require-approval": Verdict.REQUIRE_APPROVAL,
+    "request_approval": Verdict.REQUIRE_APPROVAL,
+    "request-approval": Verdict.REQUIRE_APPROVAL,
+}
+
+
+def _wire_error() -> ContractError:
+    return ContractError("Malformed governance response", code="RESPONSE_INVALID")
+
+
+def _strict_wire_object(body: bytes) -> dict[str, Any]:
+    if not isinstance(body, bytes):
+        raise _wire_error()
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError
+            result[key] = value
+        return result
+
+    def finite_float(value: str) -> float:
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError
+        return result
+
+    def reject_constant(_: str) -> None:
+        raise ValueError
+
+    try:
+        value = json.loads(
+            body.decode("utf-8", errors="strict"),
+            object_pairs_hook=unique_object,
+            parse_constant=reject_constant,
+            parse_float=finite_float,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
+        raise _wire_error() from None
+    if not isinstance(value, dict):
+        raise _wire_error()
+    return value
+
+
+def _wire_decision(
+    data: dict[str, Any], field_name: str, vocabulary: dict[str, Verdict]
+) -> Verdict | None:
+    if field_name not in data:
+        return None
+    value = data[field_name]
+    if not isinstance(value, str) or value not in vocabulary:
+        raise _wire_error()
+    return vocabulary[value]
+
+
+def _valid_wire_constraints(value: Any) -> bool:
+    if isinstance(value, dict):
+        return True
+    if not isinstance(value, list):
+        return False
+    return all(isinstance(item, str) for item in value) or all(
+        isinstance(item, dict) for item in value
+    )
+
+
 @dataclass
 class EvaluationResult:
     """Response from a governance evaluation.
@@ -211,7 +283,7 @@ class EvaluationResult:
     trust_tier: str | None = None
     alignment_score: float | None = None
     behavioral_violations: list[str] | None = None
-    constraints: list[dict[str, Any]] | None = None
+    constraints: list[dict[str, Any]] | list[str] | dict[str, Any] | None = None
     fallback_used: bool = False  # True when fail-open produced this result
     diagnostics: list[Any] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
@@ -268,6 +340,32 @@ class EvaluationResult:
             raw=dict(data),
             retry_plan=_parse_retry_plan(data),
         )
+
+    @classmethod
+    def from_wire(cls, body: bytes) -> EvaluationResult:
+        """Strictly parse one successful Core evaluation response."""
+        data = _strict_wire_object(body)
+        verdict = _wire_decision(data, "verdict", _WIRE_VERDICTS)
+        action = _wire_decision(data, "action", _WIRE_ACTIONS)
+        if verdict is None and action is None:
+            raise _wire_error()
+        if verdict is not None and action is not None and verdict is not action:
+            raise _wire_error()
+
+        if "fallback_used" in data and type(data["fallback_used"]) is not bool:
+            raise _wire_error()
+        constraints = data.get("constraints")
+        if constraints is not None and not _valid_wire_constraints(constraints):
+            raise _wire_error()
+        for field_name in ("guardrails_result", "guardrails"):
+            if data.get(field_name) is not None and not isinstance(data[field_name], dict):
+                raise _wire_error()
+
+        result = cls.from_dict(data)
+        decision = verdict if verdict is not None else action
+        assert decision is not None
+        result.verdict = decision
+        return result
 
     @classmethod
     def fallback_allow(cls, reason: str) -> EvaluationResult:
