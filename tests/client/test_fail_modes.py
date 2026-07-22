@@ -14,6 +14,7 @@ from openbox_core.client import (
 )
 from openbox_core.contracts.results import Verdict
 from openbox_core.errors import (
+    ContractError,
     GovernanceAPIError,
     OpenBoxAuthError,
     OpenBoxNetworkError,
@@ -94,11 +95,29 @@ class TestFailOpen:
         result = make_client(handler).evaluate({"x": 1})
         assert result.fallback_used is True
 
-    def test_unparseable_body_returns_fallback_allow(self):
+    def test_redirect_is_not_parsed_as_success(self):
+        def handler(request):
+            return httpx.Response(302, json={"verdict": "allow"})
+
+        result = make_client(handler).evaluate({"x": 1})
+        assert result.fallback_used is True
+
+    def test_unparseable_success_is_contract_failure(self):
         def handler(request):
             return httpx.Response(200, content=b"<html>not json</html>")
 
-        result = make_client(handler).evaluate({"x": 1})
+        with pytest.raises(ContractError, match="Malformed governance response"):
+            make_client(handler).evaluate({"x": 1})
+
+    def test_client_creation_failure_still_follows_fail_open(self, monkeypatch):
+        client = make_client(lambda _: httpx.Response(200, json={}))
+
+        def fail():
+            raise RuntimeError("client setup failed")
+
+        monkeypatch.setattr(client, "_sync", fail)
+        result = client.evaluate({"x": 1})
+        assert result.verdict is Verdict.ALLOW
         assert result.fallback_used is True
 
     async def test_async_network_error_fallback(self):
@@ -177,7 +196,7 @@ class TestAuthValidate:
 
 class TestClose:
     def test_close_idempotent(self):
-        client = make_client(lambda r: httpx.Response(200, json={}))
+        client = make_client(lambda r: httpx.Response(200, json={"verdict": "allow"}))
         client.evaluate({"x": 1})
         client.close()
         client.close()
