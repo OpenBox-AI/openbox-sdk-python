@@ -5,7 +5,7 @@ import from constrained framework paths.
 
 Hierarchy:
     OpenBoxError (base)
-    ├── ContractError               # strict-gate event/runtime contract violation
+    ├── ContractError               # SDK input or Core response contract violation
     ├── OpenBoxConfigError
     │   ├── OpenBoxAuthError
     │   │   └── OpenBoxSigningError # Core rejected a signed (AIP DID) request
@@ -62,11 +62,10 @@ class OpenBoxError(Exception):
 
 
 class ContractError(OpenBoxError):
-    """Raised by the always-strict gate on a malformed event/runtime contract.
+    """Raised when SDK input or a successful Core response violates its contract.
 
-    Contract violations raise *before* any network send, regardless of the
-    ``on_api_error`` fail-open/fail-closed setting — fail-open applies only to
-    network errors, never to contract violations.
+    Input violations raise before network send; response violations raise after
+    a successful exchange. Neither is converted to a fail-open ALLOW result.
 
     Attributes:
         code: Machine-readable violation code (e.g. ``HOOK_TRIGGER_FALSE``).
