@@ -9,8 +9,9 @@ Transport rules:
 - Signed requests send ``content=body_bytes`` — NEVER ``json=`` (client-side
   re-serialization breaks Core's body-hash verification).
 - ``httpx`` is imported lazily so this module never taints pure import paths.
-- Fail modes apply to NETWORK errors only — contract violations raise before
-  any send (see gate.py) and are never converted to fail-open ALLOWs:
+- Fail modes apply to NETWORK errors only — SDK input contract violations raise
+  before send and malformed successful Core responses raise after receive; neither
+  is converted to a fail-open ALLOW:
     * fail_open (default): return allow-shaped ``EvaluationResult`` with
       ``fallback_used=True`` (callers can tell it apart from a policy ALLOW).
     * fail_closed: raise ``GovernanceAPIError`` (adapters map to native
@@ -200,13 +201,9 @@ class EvaluationClient:
         return self._parse_evaluate_response(response)
 
     def _parse_evaluate_response(self, response: Any) -> EvaluationResult:
-        if response.status_code >= 400:
+        if not 200 <= response.status_code < 300:
             return self._network_failure(f"Governance API error: HTTP {response.status_code}")
-        try:
-            data = response.json()
-        except Exception as e:
-            return self._network_failure(f"Governance API returned unparseable body: {e}")
-        result = EvaluationResult.from_dict(data)
+        result = EvaluationResult.from_wire(response.content)
         if result.verdict.should_stop():
             logger.info(f"Governance blocked: {result.reason} (policy: {result.policy_id})")
         return result
