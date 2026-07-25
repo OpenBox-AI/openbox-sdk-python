@@ -139,6 +139,8 @@ class TestSandboxExecutionPrivacy:
     SAFE_ATTRIBUTES = {
         "sandbox.provider": "openshell",
         "openbox.sandbox.profile_id": "accounts-payable",
+        "openbox.sandbox.compatibility_id": "openbox-direct-hook-v1",
+        "openbox.sandbox.template_sha256": "d" * 64,
         "openbox.sandbox.image_digest": "sha256:" + "a" * 64,
         "openbox.sandbox.policy_sha256": "b" * 64,
         "openbox.sandbox.stdout_bytes": 12,
@@ -178,6 +180,9 @@ class TestSandboxExecutionPrivacy:
         [
             ({"authorization": "Bearer secret"}, None),
             ({"openbox.sandbox.stdout_sha256": "not-a-hash"}, None),
+            ({"openbox.sandbox.template_sha256": "not-a-hash"}, None),
+            ({"openbox.sandbox.template_sha256": "D" * 64}, None),
+            ({"openbox.sandbox.compatibility_id": "x" * 513}, None),
             ({"sandbox.provider": ["openshell"]}, None),
             ({"sandbox.provider": "openshell"}, {"request_body": "secret"}),
             ({"sandbox.provider": "openshell"}, {"error": "raw stderr"}),
