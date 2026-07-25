@@ -40,6 +40,7 @@ class HookType(str, Enum):
     DB_QUERY = "db_query"
     FILE_OPERATION = "file_operation"
     FUNCTION_CALL = "function_call"
+    SANDBOX_EXECUTION = "sandbox_execution"
     LLM_CALL = "llm_call"  # reserved; disabled until provider hooks are implemented
 
 
@@ -96,6 +97,7 @@ _DEFAULT_KIND_BY_HOOK: dict[str, str] = {
     "db_query": "CLIENT",
     "file_operation": "INTERNAL",
     "function_call": "INTERNAL",
+    "sandbox_execution": "INTERNAL",
     "llm_call": "CLIENT",
 }
 
@@ -128,6 +130,9 @@ _ROOT_FIELDS_BY_HOOK_TYPE: dict[str, tuple[str, ...]] = {
         "bytes_written",
     ),
     "function_call": ("function", "module", "args", "result"),
+    # Sandbox evidence is deliberately attributes-only. It must never gain body,
+    # environment, command, or credential-bearing root fields.
+    "sandbox_execution": (),
 }
 
 
