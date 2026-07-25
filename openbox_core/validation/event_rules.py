@@ -37,6 +37,8 @@ _SANDBOX_SAFE_ATTRIBUTES = frozenset(
     {
         "sandbox.provider",
         "openbox.sandbox.profile_id",
+        "openbox.sandbox.compatibility_id",
+        "openbox.sandbox.template_sha256",
         "openbox.sandbox.runtime_contract_version",
         "openbox.sandbox.adapter_build_sha256",
         "openbox.sandbox.image_digest",
