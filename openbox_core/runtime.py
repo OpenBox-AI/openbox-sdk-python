@@ -63,6 +63,9 @@ class OpenBoxRuntime:
             on_api_error=config.on_api_error,
             # Mutually exclusive by config validation — at most one is non-None.
             identity=config.load_okta_identity() or config.load_identity(),
+            # Non-None only in bootstrap mode, where load_okta_identity() returns
+            # None because Core has not supplied the metadata yet.
+            okta_bootstrap_private_key=config.okta_bootstrap_private_key(),
             sdk_version=config.sdk_version,
             sdk_engine=config.sdk_engine,
             sdk_language=config.sdk_language,

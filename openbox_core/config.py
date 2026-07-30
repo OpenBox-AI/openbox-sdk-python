@@ -94,6 +94,32 @@ _OKTA_TRIGGER_FIELDS: tuple[str, ...] = tuple(
 )
 _VALID_EXPLICIT_IDENTITY_METHODS = ("openbox_did", "okta_ai_agent")
 
+# The identity metadata OpenBox Core supplies via GET /api/v2/auth/bootstrap.
+#
+# ``okta_agent_algorithm`` is deliberately absent: it is an algorithm constraint
+# rather than identity metadata, it is harmless to leave set to its only allowed
+# value, and the algorithm actually used is the one Core returns (re-checked as
+# RS256 on arrival). ``okta_agent_private_key`` is absent because Core can never
+# supply it — it is required in every Okta mode.
+_OKTA_BOOTSTRAP_MANAGED_FIELDS: tuple[str, ...] = (
+    "openbox_agent_id",
+    "organization_id",
+    "deployment_id",
+    "agent_proof_audience",
+    "okta_agent_id",
+    "okta_agent_key_id",
+)
+
+
+def _field_label(field: str) -> str:
+    """``field (OPENBOX_ENV_NAME)`` — matching the TypeScript SDK's wording.
+
+    An operator debugging a mixed-mode rejection needs the env var to unset, not
+    just the internal field name.
+    """
+    suffix = _ENV_FIELDS.get(field)
+    return f"{field} ({GLOBAL_ENV_PREFIX}_{suffix})" if suffix else field
+
 
 @dataclass
 class HitlConfig:
@@ -314,17 +340,45 @@ class OpenBoxConfig:
                 resolved_method = "legacy_unsigned"
 
         if resolved_method == "okta_ai_agent":
-            missing = [f for f in _OKTA_IDENTITY_FIELDS if not getattr(self, f)]
-            if missing:
+            # The private key is the one value Core can never supply, in either mode.
+            if not self.okta_agent_private_key:
                 raise OpenBoxConfigError(
-                    f"okta_ai_agent identity requires {', '.join(_OKTA_IDENTITY_FIELDS)}; "
-                    f"missing: {', '.join(missing)}."
+                    "okta_ai_agent identity requires okta_agent_private_key "
+                    "(OPENBOX_OKTA_AGENT_PRIVATE_KEY); OpenBox never holds or "
+                    "returns an agent's private key."
                 )
-            if self.okta_agent_algorithm != "RS256":
-                raise OpenBoxConfigError(
-                    f"Unsupported okta_agent_algorithm {self.okta_agent_algorithm!r}; "
-                    "only 'RS256' is supported at launch."
-                )
+
+            mode = _classify_okta_config_mode(self)
+            if mode == "mixed":
+                raise OpenBoxConfigError(_describe_mixed_okta_config(self))
+            if mode == "legacy":
+                # Fully explicit configuration — unchanged from before bootstrap
+                # existed, so an already-deployed runtime keeps working verbatim.
+                missing = [f for f in _OKTA_IDENTITY_FIELDS if not getattr(self, f)]
+                if missing:
+                    raise OpenBoxConfigError(
+                        f"okta_ai_agent identity requires {', '.join(_OKTA_IDENTITY_FIELDS)}; "
+                        f"missing: {', '.join(missing)}."
+                    )
+                if self.okta_agent_algorithm != "RS256":
+                    raise OpenBoxConfigError(
+                        f"Unsupported okta_agent_algorithm {self.okta_agent_algorithm!r}; "
+                        "only 'RS256' is supported at launch."
+                    )
+            else:
+                # Bootstrap mode. Nothing further to validate offline: key parsing,
+                # RSA size, and the thumbprint match against the selected credential
+                # all need the private key and the network, and belong to the
+                # bootstrap step itself. This method stays pure and offline.
+                #
+                # An explicitly set algorithm must still be the allowlisted one, so a
+                # stale OPENBOX_OKTA_AGENT_ALGORITHM=RS512 fails here rather than
+                # being silently ignored.
+                if self.okta_agent_algorithm and self.okta_agent_algorithm != "RS256":
+                    raise OpenBoxConfigError(
+                        f"Unsupported okta_agent_algorithm {self.okta_agent_algorithm!r}; "
+                        "only 'RS256' is supported at launch."
+                    )
         elif resolved_method == "openbox_did":
             # both-or-neither; format-validate the DID eagerly.
             if not (self.agent_did and self.agent_private_key):
@@ -355,6 +409,43 @@ class OpenBoxConfig:
 
         return AgentIdentity.from_private_key(self.agent_did, self.agent_private_key)
 
+    def okta_config_mode(self) -> str | None:
+        """How this config's Okta metadata arrives, or None when not Okta mode.
+
+        One of ``"bootstrap"``, ``"legacy"``, or ``"mixed"`` — see
+        :func:`_classify_okta_config_mode`.
+
+        An explicit ``identity_method`` WINS over field presence, matching
+        ``resolveIdentityMethod`` in the TypeScript SDK. Deciding purely on
+        presence would discard ``identity_method="okta_ai_agent"`` the moment any
+        DID field were also set, and on a directly-constructed (unvalidated)
+        config — a path :meth:`load_okta_identity` documents as supported — that
+        would silently hand the client a v1 DID identity to sign with instead of
+        surfacing the conflict.
+        """
+        if self.identity_method == "okta_ai_agent":
+            return _classify_okta_config_mode(self)
+        if self.identity_method is not None:
+            # An explicit non-Okta method: never Okta mode, whatever fields are set.
+            return None
+
+        did_present = bool(self.agent_did) or bool(self.agent_private_key)
+        okta_present = any(bool(getattr(self, f)) for f in _OKTA_TRIGGER_FIELDS)
+        if did_present or not okta_present:
+            return None
+        return _classify_okta_config_mode(self)
+
+    def okta_bootstrap_private_key(self) -> str | None:
+        """The private key to bootstrap with, or None when not in bootstrap mode.
+
+        The client treats a non-None result as its signal that it is a v2 client
+        whose identity is not yet resolved — which is what stops it from silently
+        routing to v1 while bootstrap is still pending.
+        """
+        if self.okta_config_mode() != "bootstrap":
+            return None
+        return self.okta_agent_private_key
+
     def load_okta_identity(self) -> Any:
         """Load an :class:`~openbox_core.identity_okta.OktaAgentIdentity` (or None).
 
@@ -362,6 +453,11 @@ class OpenBoxConfig:
         Okta fields directly rather than `identity_method`, so it works on a
         directly-constructed (unvalidated) config too. Decodes + loads the
         PKCS8 PEM key exactly once.
+
+        Returns None in bootstrap mode: the identity cannot be built until Core
+        supplies its metadata (see :meth:`okta_bootstrap_private_key`). The
+        all-fields-present check below already produces that result, since
+        bootstrap mode leaves every one of them unset.
         """
         # Local variables (not repeated `self.x` attribute access) so mypy
         # narrows `str | None` -> `str` from the truthiness check below.
@@ -400,6 +496,45 @@ class OpenBoxConfig:
             algorithm=self.okta_agent_algorithm,  # type: ignore[arg-type]
         )
         return OktaAgentIdentity.from_config(candidate)
+
+
+def _classify_okta_config_mode(config: OpenBoxConfig) -> str:
+    """Classify how an okta_ai_agent config supplies its identity metadata.
+
+    Returns one of:
+
+    - ``"bootstrap"``  — only the private key is local; Core supplies the rest.
+    - ``"legacy"``     — every metadata field is configured locally; no bootstrap.
+    - ``"mixed"``      — SOME metadata fields are configured. Rejected, never merged.
+
+    ``mixed`` is an error rather than a "fill in the gaps from Core" convenience
+    because partially-stale local metadata is the exact failure bootstrap exists
+    to eliminate: a leftover ``okta_agent_key_id`` from before a rotation would
+    silently win over the correct value Core would have supplied.
+
+    Callers must have already established that the resolved method is
+    ``okta_ai_agent``; this only decides how its metadata arrives.
+    """
+    present = [f for f in _OKTA_BOOTSTRAP_MANAGED_FIELDS if getattr(config, f)]
+    if not present:
+        return "bootstrap"
+    if len(present) == len(_OKTA_BOOTSTRAP_MANAGED_FIELDS):
+        return "legacy"
+    return "mixed"
+
+
+def _describe_mixed_okta_config(config: OpenBoxConfig) -> str:
+    """Error text for a partial Okta configuration, naming the offending fields."""
+    present = [_field_label(f) for f in _OKTA_BOOTSTRAP_MANAGED_FIELDS if getattr(config, f)]
+    missing = [_field_label(f) for f in _OKTA_BOOTSTRAP_MANAGED_FIELDS if not getattr(config, f)]
+    return (
+        "Okta identity configuration is incomplete and cannot be combined with "
+        f"identity bootstrap. Configured: {', '.join(present)}. "
+        f"Missing: {', '.join(missing)}. Either remove the configured field(s) to "
+        "let OpenBox Core supply all identity metadata (bootstrap mode, requiring "
+        "only api_url, api_key and okta_agent_private_key), or configure every "
+        "remaining field for fully explicit configuration."
+    )
 
 
 def _validate_url_security(api_url: str) -> None:

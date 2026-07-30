@@ -34,9 +34,11 @@ Transport rules:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .contracts.results import ApprovalResult, EvaluationResult
 from .errors import (
@@ -46,7 +48,7 @@ from .errors import (
     OpenBoxNetworkError,
     map_signing_error,
 )
-from .identity import AgentIdentity, prepare_signed_request
+from .identity import AgentIdentity, build_auth_headers, prepare_signed_request
 from .identity_okta import OktaAgentIdentity, prepare_okta_signed_request
 from .identity_transitions import (
     TRANSITION_PROOF_PATH,
@@ -56,6 +58,12 @@ from .identity_transitions import (
 )
 from .identity_types import OktaAiAgentIdentityConfig, OpenBoxDidIdentityConfig
 from .sdk_version import DEFAULT_SDK_ENGINE, DEFAULT_SDK_LANGUAGE
+
+if TYPE_CHECKING:
+    # Type-only: `from __future__ import annotations` defers every annotation, so
+    # this costs nothing at runtime and keeps the bootstrap module off the import
+    # path of a client that never bootstraps.
+    from .bootstrap import IdentityBootstrapDocument
 
 __all__ = [
     "EVALUATE_PATH",
@@ -145,6 +153,7 @@ class EvaluationClient:
         timeout_seconds: float = 30.0,
         on_api_error: str = "fail_open",
         identity: AgentIdentity | OktaAgentIdentity | None = None,
+        okta_bootstrap_private_key: str | None = None,
         sdk_version: str | None = None,
         sdk_engine: str = DEFAULT_SDK_ENGINE,
         sdk_language: str = DEFAULT_SDK_LANGUAGE,
@@ -160,6 +169,14 @@ class EvaluationClient:
                 ``AgentIdentity`` selects v1 OpenBox DID routes, an
                 ``OktaAgentIdentity`` selects v2 Okta AI Agent routes, and
                 ``None`` selects inferred v1 legacy_unsigned (API-key-only).
+            okta_bootstrap_private_key: PKCS8 PEM RSA private key for BOOTSTRAP
+                mode — the client fetches this agent's non-secret identity
+                metadata from ``GET /api/v2/auth/bootstrap`` and builds its
+                ``OktaAgentIdentity`` from the result. Mutually exclusive with
+                ``identity``. Supplying it makes this a v2 client IMMEDIATELY —
+                before the fetch completes — so a bootstrap failure can never be
+                mistaken for "no v2 identity configured" and silently downgrade
+                the request to v1.
             sdk_version/sdk_engine/sdk_language: Values used to build
                 X-OpenBox-SDK-Version as openbox-{engine}-{language}-v{version}.
             transport/async_transport: Optional httpx transports (tests inject
@@ -167,11 +184,31 @@ class EvaluationClient:
         """
         if on_api_error not in ("fail_open", "fail_closed"):
             raise ValueError(f"on_api_error must be 'fail_open' or 'fail_closed', got {on_api_error!r}")
+        if okta_bootstrap_private_key and identity is not None:
+            raise OpenBoxConfigError(
+                "EvaluationClient received both okta_bootstrap_private_key and a "
+                "resolved identity; supply exactly one — bootstrap mode fetches the "
+                "metadata a resolved identity already carries."
+            )
         self._api_url = api_url.rstrip("/")
         self._api_key = api_key
         self._timeout = timeout_seconds
         self._on_api_error = on_api_error
         self._identity = identity
+        self._okta_bootstrap_private_key = okta_bootstrap_private_key
+        # Populated once Core's metadata arrives; replaced by refresh.
+        self._bootstrap_document: IdentityBootstrapDocument | None = None
+        # Single-flight guards so concurrent first requests perform ONE fetch.
+        #
+        # Constructed HERE, not lazily. `if lock is None: lock = Lock()` is a
+        # load/call/store, and CPython may switch threads after the Lock() call
+        # returns but before the store — so two threads can each bind a
+        # different lock object and both enter the critical section. Eagerly
+        # constructing costs nothing (threading.Lock is trivial, and asyncio.Lock
+        # binds its event loop lazily on first contended acquire, not at
+        # construction, on the Python versions this package supports).
+        self._bootstrap_lock = threading.Lock()
+        self._abootstrap_lock = asyncio.Lock()
         self._sdk_version = sdk_version
         self._sdk_engine = sdk_engine
         self._sdk_language = sdk_language
@@ -211,10 +248,232 @@ class EvaluationClient:
             await self._async_client.aclose()
             self._async_client = None
 
+    # ── Identity bootstrap ────────────────────────────────────────────────
+
+    @property
+    def _is_v2(self) -> bool:
+        """True when this client is configured for the v2 (okta_ai_agent) method.
+
+        Deliberately true while a bootstrap is still pending. Route selection must
+        not depend on whether the metadata has ARRIVED yet — otherwise an
+        unreachable Core would turn a v2 client into a v1 one and send an unsigned
+        request, which no failure is ever permitted to cause.
+        """
+        return isinstance(self._identity, OktaAgentIdentity) or bool(
+            self._okta_bootstrap_private_key
+        )
+
+    def identity_metadata(self) -> IdentityBootstrapDocument | None:
+        """The validated bootstrap document, or None.
+
+        Non-secret; safe to log.
+        """
+        return self._bootstrap_document
+
+    def _bootstrap_request(self) -> tuple[str, dict]:
+        """URL + headers for the bootstrap GET.
+
+        API-key-only, so it builds headers directly rather than going through
+        ``_prepared`` — which would sign, and cannot, since the response is what
+        makes signing possible.
+        """
+        from .bootstrap import AUTH_BOOTSTRAP_PATH_V2
+
+        headers = build_auth_headers(
+            self._api_key,
+            sdk_version=self._sdk_version,
+            sdk_engine=self._sdk_engine,
+            sdk_language=self._sdk_language,
+        )
+        headers["Accept"] = "application/json"
+        return f"{self._api_url}{AUTH_BOOTSTRAP_PATH_V2}", headers
+
+    def _identity_from_document(
+        self, document: IdentityBootstrapDocument, private_key_pem: str
+    ) -> OktaAgentIdentity:
+        """Build the v2 identity from a validated document + the local key.
+
+        The thumbprint check has already passed by the time this is called.
+        """
+        from .identity_types import OktaAiAgentIdentityConfig
+
+        return OktaAgentIdentity.from_config(
+            OktaAiAgentIdentityConfig(
+                openbox_agent_id=document.openbox_agent_id,
+                organization_id=document.organization_id,
+                deployment_id=document.deployment_id,
+                external_agent_id=document.okta.external_agent_id,
+                key_id=document.okta.credential_kid,
+                audience=document.assertion_audience,
+                private_key=private_key_pem,
+                algorithm="RS256",
+            )
+        )
+
+    def _run_bootstrap(self) -> IdentityBootstrapDocument:
+        """Fetch, validate, thumbprint-check, and build the identity (sync).
+
+        Order matters: the local key is parsed and size-checked first (a malformed
+        or undersized key fails without a network round trip), then the document is
+        fetched and structurally validated, then the thumbprint is compared. Only
+        after ALL of that is the document published.
+        """
+        from .bootstrap import assert_private_key_matches_document, parse_bootstrap_response
+        from .identity_okta import load_rsa_pkcs8_private_key
+
+        private_key_pem = self._okta_bootstrap_private_key
+        if not private_key_pem:
+            raise OpenBoxConfigError("No Okta identity is configured for this client.")
+
+        # Fails locally, before any request, on a malformed / non-RSA / undersized key.
+        load_rsa_pkcs8_private_key(private_key_pem)
+
+        url, headers = self._bootstrap_request()
+        try:
+            response = self._sync().get(url, headers=headers)
+        except Exception as exc:
+            # Never fall back to an unsigned or v1 request — surface the outage.
+            raise OpenBoxNetworkError(
+                f"Identity bootstrap failed: could not reach OpenBox Core at {url} ({exc})."
+            ) from exc
+
+        document = parse_bootstrap_response(response.status_code, response.content)
+        # Raises on mismatch — no governed request is ever sent after this point.
+        assert_private_key_matches_document(private_key_pem, document)
+
+        # Published together, in one step, so no observer can ever see the
+        # document from one credential alongside the signing key of another.
+        self._identity = self._identity_from_document(document, private_key_pem)
+        self._bootstrap_document = document
+        logger.info(
+            "OpenBox identity bootstrap succeeded (version %s, agent %s, kid %s, "
+            "thumbprint matched)",
+            document.bootstrap_version,
+            document.openbox_agent_id,
+            document.okta.credential_kid,
+        )
+        return document
+
+    async def _arun_bootstrap(self) -> IdentityBootstrapDocument:
+        """Async twin of :meth:`_run_bootstrap`, with identical ordering."""
+        from .bootstrap import assert_private_key_matches_document, parse_bootstrap_response
+        from .identity_okta import load_rsa_pkcs8_private_key
+
+        private_key_pem = self._okta_bootstrap_private_key
+        if not private_key_pem:
+            raise OpenBoxConfigError("No Okta identity is configured for this client.")
+
+        load_rsa_pkcs8_private_key(private_key_pem)
+
+        url, headers = self._bootstrap_request()
+        try:
+            response = await self._async().get(url, headers=headers)
+        except Exception as exc:
+            raise OpenBoxNetworkError(
+                f"Identity bootstrap failed: could not reach OpenBox Core at {url} ({exc})."
+            ) from exc
+
+        document = parse_bootstrap_response(response.status_code, response.content)
+        assert_private_key_matches_document(private_key_pem, document)
+
+        # Published together, in one step, so no observer can ever see the
+        # document from one credential alongside the signing key of another.
+        self._identity = self._identity_from_document(document, private_key_pem)
+        self._bootstrap_document = document
+        logger.info(
+            "OpenBox identity bootstrap succeeded (version %s, agent %s, kid %s, "
+            "thumbprint matched)",
+            document.bootstrap_version,
+            document.openbox_agent_id,
+            document.okta.credential_kid,
+        )
+        return document
+
+    def _ensure_okta_identity(self) -> None:
+        """Resolve the v2 identity, bootstrapping once if needed (sync).
+
+        Concurrent callers serialize on a lock and only the first performs the
+        fetch. A failure propagates and leaves the identity unresolved, so a later
+        request may retry a transient outage.
+        """
+        if isinstance(self._identity, OktaAgentIdentity) or not self._okta_bootstrap_private_key:
+            return
+        with self._bootstrap_lock:
+            # Re-check inside the lock: a racing caller may have finished already.
+            if isinstance(self._identity, OktaAgentIdentity):
+                return
+            self._run_bootstrap()
+
+    async def _aensure_okta_identity(self) -> None:
+        """Async twin of :meth:`_ensure_okta_identity`."""
+        if isinstance(self._identity, OktaAgentIdentity) or not self._okta_bootstrap_private_key:
+            return
+        async with self._abootstrap_lock:
+            if isinstance(self._identity, OktaAgentIdentity):
+                return
+            await self._arun_bootstrap()
+
+    def refresh_identity_metadata(self) -> IdentityBootstrapDocument:
+        """Re-fetch identity metadata from Core and replace the cached copy (sync).
+
+        For long-running agents whose selected credential changed. The private-key
+        thumbprint is re-verified BEFORE anything is replaced, so a refresh that
+        discovers a rotated-away credential raises and leaves the client on its
+        previous (still self-consistent) identity rather than adopting metadata
+        this runtime cannot sign for.
+
+        Explicit on purpose. The client never refreshes automatically after a
+        signature, binding, or credential error: rotation may have selected a new
+        public key while this process still holds the old private key, so a blind
+        refresh-and-replay would hide the real problem and could not repair it.
+        """
+        if not self._okta_bootstrap_private_key:
+            raise OpenBoxConfigError(
+                "refresh_identity_metadata() requires identity bootstrap mode; this "
+                "client was constructed with explicit Okta identity configuration."
+            )
+        # Same lock as the first bootstrap: without it, a refresh racing an
+        # in-flight first bootstrap double-fetches, and whichever finishes last
+        # wins — which could leave identity_metadata() reporting one credential
+        # while requests sign with another.
+        with self._bootstrap_lock:
+            return self._run_bootstrap()
+
+    async def arefresh_identity_metadata(self) -> IdentityBootstrapDocument:
+        """Async twin of :meth:`refresh_identity_metadata`."""
+        if not self._okta_bootstrap_private_key:
+            raise OpenBoxConfigError(
+                "arefresh_identity_metadata() requires identity bootstrap mode; this "
+                "client was constructed with explicit Okta identity configuration."
+            )
+        async with self._abootstrap_lock:
+            return await self._arun_bootstrap()
+
+    # ── Request preparation ───────────────────────────────────────────────
+
     def _prepared(
         self, method: str, v1_path: str, v2_path: str, payload: dict | None
     ) -> tuple[str, dict, bytes]:
         """Build ``(url, headers, body)`` for the version selected by identity type.
+
+        In bootstrap mode the identity is resolved here, on the first request that
+        needs it — the one thing standing between an unresolved v2 client and a
+        request. It raises rather than proceeding unsigned.
+        """
+        self._ensure_okta_identity()
+        return self._build_prepared(method, v1_path, v2_path, payload)
+
+    async def _aprepared(
+        self, method: str, v1_path: str, v2_path: str, payload: dict | None
+    ) -> tuple[str, dict, bytes]:
+        """Async twin of :meth:`_prepared`."""
+        await self._aensure_okta_identity()
+        return self._build_prepared(method, v1_path, v2_path, payload)
+
+    def _build_prepared(
+        self, method: str, v1_path: str, v2_path: str, payload: dict | None
+    ) -> tuple[str, dict, bytes]:
+        """Sign and build the request. Performs no I/O.
 
         An ``OktaAgentIdentity`` routes to ``v2_path`` and signs a v2
         assertion; any other identity (``AgentIdentity`` or ``None``) routes
@@ -282,7 +541,7 @@ class EvaluationClient:
 
     async def aevaluate(self, payload: dict) -> EvaluationResult:
         """Async :meth:`evaluate`."""
-        url, headers, body = self._prepared("POST", EVALUATE_PATH, EVALUATE_PATH_V2, payload)
+        url, headers, body = await self._aprepared("POST", EVALUATE_PATH, EVALUATE_PATH_V2, payload)
         try:
             response = await self._async().post(url, content=body, headers=headers)
         except Exception as e:
@@ -333,7 +592,7 @@ class EvaluationClient:
     ) -> ApprovalResult | None:
         """Async :meth:`poll_approval`."""
         payload = {"workflow_id": workflow_id, "run_id": run_id, "activity_id": activity_id}
-        url, headers, body = self._prepared("POST", APPROVAL_PATH, APPROVAL_PATH_V2, payload)
+        url, headers, body = await self._aprepared("POST", APPROVAL_PATH, APPROVAL_PATH_V2, payload)
         try:
             response = await self._async().post(url, content=body, headers=headers)
         except Exception as e:
@@ -373,7 +632,7 @@ class EvaluationClient:
 
     async def avalidate_api_key(self) -> bool:
         """Async :meth:`validate_api_key`."""
-        url, headers, _ = self._prepared("GET", AUTH_VALIDATE_PATH, AUTH_VALIDATE_PATH_V2, None)
+        url, headers, _ = await self._aprepared("GET", AUTH_VALIDATE_PATH, AUTH_VALIDATE_PATH_V2, None)
         try:
             response = await self._async().get(url, headers=headers)
         except Exception as e:
@@ -415,7 +674,7 @@ class EvaluationClient:
     async def aemit_handoff(self, target_agent_id: str, reason: str | None = None) -> dict[str, Any]:
         """Async :meth:`emit_handoff`."""
         payload = self._handoff_payload(target_agent_id, reason)
-        url, headers, body = self._prepared("POST", HANDOFF_PATH, HANDOFF_PATH_V2, payload)
+        url, headers, body = await self._aprepared("POST", HANDOFF_PATH, HANDOFF_PATH_V2, payload)
         try:
             response = await self._async().post(url, content=body, headers=headers)
         except Exception as e:
@@ -423,7 +682,14 @@ class EvaluationClient:
         return self._parse_handoff_response(response)
 
     def _handoff_payload(self, target_agent_id: str, reason: str | None) -> dict[str, Any]:
-        if self._identity is None:
+        # `not self._is_v2`, never `self._identity is None` alone: in bootstrap
+        # mode the Okta identity is not resolved until the first request needs
+        # it, so testing only the resolved field here would reject a correctly
+        # configured okta_ai_agent client whose first call happens to be a
+        # handoff — and would tell the operator to provision an identity they
+        # already have. Worse, this guard runs BEFORE _prepared(), so the
+        # bootstrap that would have populated _identity never even starts.
+        if self._identity is None and not self._is_v2:
             raise OpenBoxConfigError(
                 "Cannot emit a source-authenticated handoff without a configured "
                 "identity (openbox_did or okta_ai_agent) — inferred unsigned mode "

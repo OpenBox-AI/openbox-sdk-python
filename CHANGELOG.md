@@ -5,6 +5,42 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Okta identity bootstrap** — an `okta_ai_agent` runtime now needs only
+  `OPENBOX_API_URL`, `OPENBOX_API_KEY`, and `OPENBOX_OKTA_AGENT_PRIVATE_KEY`. The SDK
+  fetches the remaining identity metadata (agent id, organization id, deployment id,
+  assertion audience, external Okta agent id, credential `kid`, algorithm) from
+  `GET /api/v2/auth/bootstrap` on first use and caches it in memory for the lifetime of
+  the client. The signed assertion and its verification are unchanged — only how the SDK
+  obtains its non-secret configuration.
+- Before the first governed request the SDK derives its private key's RFC 7638 public-key
+  thumbprint and compares it (constant-time) with the one Core reports for the agent's
+  selected credential. A mismatch raises `OpenBoxConfigError` with actionable guidance;
+  no governed request is sent.
+- `EvaluationClient.refresh_identity_metadata()` / `arefresh_identity_metadata()` for
+  long-running agents whose selected credential rotated. The thumbprint is re-verified
+  *before* cached metadata is replaced, so a credential rotated to a key this process
+  does not hold fails loudly and leaves the client on its previous identity. The client
+  never refreshes automatically after an auth failure — a blind retry cannot repair a key
+  mismatch and would hide it.
+- `EvaluationClient.identity_metadata()` exposes the validated bootstrap document
+  (non-secret).
+- New modules `openbox_core.bootstrap` and `openbox_core.jwk_thumbprint`.
+
+### Changed
+- Okta configuration now resolves into exactly one of three modes, never a blend:
+  **bootstrap** (private key only), **legacy explicit** (every metadata field set, works
+  unchanged), or **invalid mixed** (only some metadata fields set) — which raises
+  `OpenBoxConfigError` naming the offending fields rather than merging stale local values
+  over what Core would have supplied.
+- `OPENBOX_DEPLOYMENT_ID` is no longer required in bootstrap mode. Core returns its own
+  deployment id, which prevents a runtime from signing for one deployment while calling
+  another.
+- No failure path downgrades to v1, to an unsigned request, or to a different identity
+  method. A Core that predates the endpoint (`404`) produces actionable upgrade guidance.
+
 ## [1.3.0] - 2026-07-30
 
 ### Added
