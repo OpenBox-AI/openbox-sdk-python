@@ -17,6 +17,15 @@ Common framework configuration fields map onto the nested groups here:
     max_body_size                                                       -> privacy
     on_api_error / api_timeout                                          -> top level
 
+Identity verification (proposal §13.1) is tagged, not a single shape:
+`agent_did` + `agent_private_key` (v1 OpenBox DID) and the Okta AI Agent
+fields (`okta_agent_id`, `okta_agent_key_id`, `okta_agent_private_key`,
+`okta_agent_algorithm`, `openbox_agent_id`, `organization_id`,
+`deployment_id`, `agent_proof_audience` — v2) are mutually exclusive; neither
+present infers `legacy_unsigned` (API-key-only). `identity_method` is an
+explicit override that still requires the matching fields. See
+`_resolve_identity_method()`.
+
 No heavy imports; safe outside sandbox paths (env access happens only inside
 ``resolve()``, never at import time).
 """
@@ -55,7 +64,35 @@ _ENV_FIELDS: dict[str, str] = {
     "agent_name": "AGENT_NAME",
     "agent_did": "AGENT_DID",
     "agent_private_key": "AGENT_PRIVATE_KEY",
+    # v2 (Okta AI Agent) tagged identity — proposal §13.1.
+    "identity_method": "AGENT_IDENTITY_METHOD",
+    "okta_agent_id": "OKTA_AGENT_ID",
+    "okta_agent_key_id": "OKTA_AGENT_KEY_ID",
+    "okta_agent_private_key": "OKTA_AGENT_PRIVATE_KEY",
+    "okta_agent_algorithm": "OKTA_AGENT_ALGORITHM",
+    "openbox_agent_id": "AGENT_ID",
+    "organization_id": "ORGANIZATION_ID",
+    "deployment_id": "DEPLOYMENT_ID",
+    "agent_proof_audience": "AGENT_PROOF_AUDIENCE",
 }
+
+# The Okta-mode required fields (proposal §13.1 rule 4). Presence of any of
+# these EXCEPT ``okta_agent_algorithm`` (which always carries the "RS256"
+# default) signals okta_ai_agent intent for inference purposes.
+_OKTA_IDENTITY_FIELDS: tuple[str, ...] = (
+    "openbox_agent_id",
+    "organization_id",
+    "deployment_id",
+    "okta_agent_id",
+    "okta_agent_key_id",
+    "okta_agent_algorithm",
+    "agent_proof_audience",
+    "okta_agent_private_key",
+)
+_OKTA_TRIGGER_FIELDS: tuple[str, ...] = tuple(
+    f for f in _OKTA_IDENTITY_FIELDS if f != "okta_agent_algorithm"
+)
+_VALID_EXPLICIT_IDENTITY_METHODS = ("openbox_did", "okta_ai_agent")
 
 
 @dataclass
@@ -134,6 +171,17 @@ class OpenBoxConfig:
     agent_name: str | None = None
     agent_did: str | None = None
     agent_private_key: str | None = field(default=None, repr=False)  # never in repr
+    # v2 (Okta AI Agent) tagged identity — proposal §13.1. Mutually exclusive
+    # with agent_did/agent_private_key; see `normalized()`.
+    identity_method: str | None = None  # explicit override; resolved in-place by normalized()
+    okta_agent_id: str | None = None  # external Okta AI Agent ID (iss/sub)
+    okta_agent_key_id: str | None = None  # kid
+    okta_agent_private_key: str | None = field(default=None, repr=False)  # PKCS8 PEM
+    okta_agent_algorithm: str = "RS256"
+    openbox_agent_id: str | None = None
+    organization_id: str | None = None
+    deployment_id: str | None = None
+    agent_proof_audience: str | None = None
     sdk_version: str | None = None
     sdk_engine: str = DEFAULT_SDK_ENGINE
     sdk_language: str = DEFAULT_SDK_LANGUAGE
@@ -222,29 +270,136 @@ class OpenBoxConfig:
                 f"on_api_error must be 'fail_open' or 'fail_closed', got {self.on_api_error!r}"
             )
 
-        # DID + private key: both-or-neither; format-validate the DID eagerly.
-        if bool(self.agent_did) != bool(self.agent_private_key):
+        self._resolve_identity_method()
+        return self
+
+    def _resolve_identity_method(self) -> None:
+        """Resolve + validate the tagged identity method (proposal §13.1).
+
+        Explicit `identity_method` wins; `agent_did` + `agent_private_key`
+        infer `openbox_did`; Okta fields infer `okta_ai_agent`; neither
+        infers `legacy_unsigned` (never explicitly selectable). DID and Okta
+        fields are mutually exclusive. Mutates `self.identity_method` to the
+        final resolved value (mirrors how `api_url` is normalized in place).
+        """
+        did_present = bool(self.agent_did) or bool(self.agent_private_key)
+        okta_present = any(bool(getattr(self, f)) for f in _OKTA_TRIGGER_FIELDS)
+
+        if did_present and okta_present:
             raise OpenBoxConfigError(
-                "agent_did and agent_private_key must be provided together "
-                "(got only one). Provide both to enable signed requests, or neither."
+                "OpenBox DID fields (agent_did, agent_private_key) and Okta "
+                f"AI Agent fields ({', '.join(_OKTA_TRIGGER_FIELDS)}) are "
+                "mutually exclusive. Configure exactly one identity "
+                "verification method."
             )
-        if self.agent_did:
+
+        if (
+            self.identity_method is not None
+            and self.identity_method not in _VALID_EXPLICIT_IDENTITY_METHODS
+        ):
+            raise OpenBoxConfigError(
+                "identity_method must be 'openbox_did' or 'okta_ai_agent' "
+                f"(got {self.identity_method!r}); 'legacy_unsigned' is "
+                "inferred from absent identity configuration, never "
+                "selected explicitly."
+            )
+
+        resolved_method = self.identity_method
+        if resolved_method is None:
+            if okta_present:
+                resolved_method = "okta_ai_agent"
+            elif did_present:
+                resolved_method = "openbox_did"
+            else:
+                resolved_method = "legacy_unsigned"
+
+        if resolved_method == "okta_ai_agent":
+            missing = [f for f in _OKTA_IDENTITY_FIELDS if not getattr(self, f)]
+            if missing:
+                raise OpenBoxConfigError(
+                    f"okta_ai_agent identity requires {', '.join(_OKTA_IDENTITY_FIELDS)}; "
+                    f"missing: {', '.join(missing)}."
+                )
+            if self.okta_agent_algorithm != "RS256":
+                raise OpenBoxConfigError(
+                    f"Unsupported okta_agent_algorithm {self.okta_agent_algorithm!r}; "
+                    "only 'RS256' is supported at launch."
+                )
+        elif resolved_method == "openbox_did":
+            # both-or-neither; format-validate the DID eagerly.
+            if not (self.agent_did and self.agent_private_key):
+                raise OpenBoxConfigError(
+                    "agent_did and agent_private_key must be provided together "
+                    "to use openbox_did identity verification (got only one, "
+                    "or neither with an explicit identity_method='openbox_did')."
+                )
             from .identity import validate_agent_did
 
             validate_agent_did(self.agent_did)
-        return self
+
+        self.identity_method = resolved_method
 
     def load_identity(self) -> Any:
         """Load an :class:`~openbox_core.identity.AgentIdentity` (or None).
 
         Decodes + loads the Ed25519 seed exactly once; callers keep the
         returned identity and never re-touch the raw key string.
+
+        Presence-based (like :meth:`load_okta_identity`), not
+        `identity_method`-based, so it also works on a directly-constructed
+        (unvalidated) config.
         """
         if not (self.agent_did and self.agent_private_key):
             return None
         from .identity import AgentIdentity
 
         return AgentIdentity.from_private_key(self.agent_did, self.agent_private_key)
+
+    def load_okta_identity(self) -> Any:
+        """Load an :class:`~openbox_core.identity_okta.OktaAgentIdentity` (or None).
+
+        Presence-based, like :meth:`load_identity` — checks the resolved
+        Okta fields directly rather than `identity_method`, so it works on a
+        directly-constructed (unvalidated) config too. Decodes + loads the
+        PKCS8 PEM key exactly once.
+        """
+        # Local variables (not repeated `self.x` attribute access) so mypy
+        # narrows `str | None` -> `str` from the truthiness check below.
+        okta_agent_id = self.okta_agent_id
+        okta_agent_key_id = self.okta_agent_key_id
+        okta_agent_private_key = self.okta_agent_private_key
+        openbox_agent_id = self.openbox_agent_id
+        organization_id = self.organization_id
+        deployment_id = self.deployment_id
+        agent_proof_audience = self.agent_proof_audience
+        if not (
+            okta_agent_id
+            and okta_agent_key_id
+            and okta_agent_private_key
+            and openbox_agent_id
+            and organization_id
+            and deployment_id
+            and agent_proof_audience
+        ):
+            return None
+        from .identity_okta import OktaAgentIdentity
+        from .identity_types import OktaAiAgentIdentityConfig
+
+        candidate = OktaAiAgentIdentityConfig(
+            openbox_agent_id=openbox_agent_id,
+            organization_id=organization_id,
+            deployment_id=deployment_id,
+            external_agent_id=okta_agent_id,
+            key_id=okta_agent_key_id,
+            audience=agent_proof_audience,
+            private_key=okta_agent_private_key,
+            # okta_agent_algorithm is a plain `str` field (env/explicit input
+            # can be any value); OktaAgentIdentity.from_config is the actual
+            # runtime enforcement of SUPPORTED_ALGORITHMS, so the Literal
+            # mismatch here is a static-typing artifact, not a real gap.
+            algorithm=self.okta_agent_algorithm,  # type: ignore[arg-type]
+        )
+        return OktaAgentIdentity.from_config(candidate)
 
 
 def _validate_url_security(api_url: str) -> None:

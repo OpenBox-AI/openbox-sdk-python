@@ -61,7 +61,8 @@ class OpenBoxRuntime:
             config.api_key,
             timeout_seconds=config.timeout_seconds,
             on_api_error=config.on_api_error,
-            identity=config.load_identity(),
+            # Mutually exclusive by config validation — at most one is non-None.
+            identity=config.load_okta_identity() or config.load_identity(),
             sdk_version=config.sdk_version,
             sdk_engine=config.sdk_engine,
             sdk_language=config.sdk_language,

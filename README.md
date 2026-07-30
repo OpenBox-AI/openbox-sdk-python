@@ -7,10 +7,14 @@ framework SDK builds on. It owns:
   `EvaluationResult`, `ApprovalResult`, `Verdict`).
 - **Always-strict governance gate** — malformed event/runtime contracts raise
   `ContractError` before send; there are no configurable gate modes.
-- **Identity & signing** — AIP DID validation + Ed25519 request signing,
-  byte-compatible with the Temporal SDK signing contract.
-- **Evaluate client** — sync + async calls to OpenBox Core
-  (`/api/v1/governance/evaluate`, `/approval`, `/auth/validate`).
+- **Identity & signing** — v1 OpenBox DID: AIP DID validation + Ed25519 request
+  signing, byte-compatible with the Temporal SDK signing contract. v2 Okta AI
+  Agent: tagged identity configuration + RS256 JWT assertion signing
+  (`openbox_core.identity_okta`, `openbox_core.identity_types`).
+- **Evaluate client** — sync + async calls to OpenBox Core, routed by
+  configured identity: `/api/v1/governance/evaluate` (`/approval`,
+  `/auth/validate`, `/handoffs`) for OpenBox DID / inferred unsigned mode, or
+  the `/api/v2/*` equivalents for Okta AI Agent — no cross-version retry.
 - **Context & runtime** — `ActivityContext`, `ContextStore`, trace
   correlation, `FrameworkAdapter` protocol, `OpenBoxRuntime`.
 - **OTel span wire serialization** — OTel spans are the internal source of

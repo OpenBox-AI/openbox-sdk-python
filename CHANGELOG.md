@@ -5,6 +5,45 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-07-30
+
+### Added
+- v2 (Okta AI Agent) identity verification support, alongside existing v1 (OpenBox DID)
+  and inferred `legacy_unsigned` support: tagged identity configuration
+  (`OpenBoxDidIdentityConfig` / `OktaAiAgentIdentityConfig` in
+  `openbox_core.identity_types`), RS256 assertion signing
+  (`openbox_core.identity_okta`), and version-aware endpoint selection —
+  `okta_ai_agent` identities route to `/api/v2/governance/evaluate`,
+  `/api/v2/governance/approval`, `GET /api/v2/auth/validate`, and
+  `/api/v2/handoffs`; there is no cross-version retry.
+- New env vars: `OPENBOX_AGENT_IDENTITY_METHOD`, `OPENBOX_OKTA_AGENT_ID`,
+  `OPENBOX_OKTA_AGENT_KEY_ID`, `OPENBOX_OKTA_AGENT_PRIVATE_KEY`,
+  `OPENBOX_OKTA_AGENT_ALGORITHM`, `OPENBOX_AGENT_ID`, `OPENBOX_ORGANIZATION_ID`,
+  `OPENBOX_DEPLOYMENT_ID`, `OPENBOX_AGENT_PROOF_AUDIENCE`. DID and Okta identity
+  fields are mutually exclusive; the canonical Okta private-key encoding is PKCS8 PEM.
+- `EvaluationClient.emit_handoff` / `aemit_handoff` — source-authenticated handoff
+  (`POST /api/v1/handoffs` for openbox_did, `/api/v2/handoffs` for okta_ai_agent).
+  Inferred unsigned mode raises `OpenBoxConfigError` (no source identity to prove)
+  instead of silently falling back to the legacy receiver-authenticated event.
+- `EvaluationClient.validate_okta_identity_transition` /
+  `avalidate_okta_identity_transition` and `.validate_openbox_did_identity_transition` /
+  `avalidate_openbox_did_identity_transition` — transition-preflight helpers that sign
+  with an **explicit candidate identity** and never fall back to the client's active
+  signer, even if the client happens to already use the same identity method.
+
+### Fixed
+- **BREAKING (security fix):** `EvaluationClient.evaluate` / `aevaluate` and
+  `.poll_approval` / `.apoll_approval` now raise an actionable
+  `OpenBoxAuthError`/`OpenBoxSigningError` on HTTP 401/403, regardless of
+  `on_api_error`. Previously, evaluate routed every `>= 400` response — including
+  401/403 — through the network-failure path, which under the default `fail_open`
+  produced a fallback `ALLOW`; an agent whose key was revoked kept operating,
+  ungoverned. Approval polling treated 401/403 the same as a transient poll failure
+  (returned `None`, read by callers as "still pending"), so a revoked agent's
+  approval wait never terminated. Both are now hard authentication failures: they
+  fail closed unconditionally and are never retried against the other API version.
+  A genuine network error or 5xx is unaffected and still respects `on_api_error`.
+
 ## [1.2.0] - 2026-07-23
 
 ### Changed

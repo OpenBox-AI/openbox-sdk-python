@@ -8,7 +8,7 @@ Hierarchy:
     ├── ContractError               # strict-gate event/runtime contract violation
     ├── OpenBoxConfigError
     │   ├── OpenBoxAuthError
-    │   │   └── OpenBoxSigningError # Core rejected a signed (AIP DID) request
+    │   │   └── OpenBoxSigningError # Core rejected a signed request (v1 DID or v2 Okta)
     │   ├── OpenBoxNetworkError
     │   └── OpenBoxInsecureURLError
     ├── GovernanceBlockedError      # hook/activity verdict BLOCK
@@ -101,10 +101,12 @@ class OpenBoxInsecureURLError(OpenBoxConfigError):
 
 
 class OpenBoxSigningError(OpenBoxAuthError):
-    """Raised when Core rejects a signed (AIP DID) request.
+    """Raised when Core rejects a signed request — v1 OpenBox DID (AIP) or
+    v2 Okta AI Agent assertion.
 
     Attributes:
-        reason_code: Core's machine reason code (e.g. ``signature_invalid``).
+        reason_code: Core's machine reason code (e.g. ``signature_invalid``
+            for v1, ``assertion_signature_invalid`` for v2).
     """
 
     def __init__(self, message: str, reason_code: str | None = None):
@@ -116,7 +118,12 @@ class OpenBoxSigningError(OpenBoxAuthError):
 # Forward-compatible: Core today often collapses identity failures into a
 # generic "invalid token" body with no machine code; these richer messages
 # activate once Core emits a machine reason code ("reason_code"/"code"/"reason").
+#
+# v1 (OpenBox DID / AIP) codes and v2 (Okta AI Agent, contract §7) codes are
+# both covered here — they are disjoint strings, so one map is unambiguous
+# for both signing contracts.
 _SIGNING_REASON_MESSAGES: dict[str, str] = {
+    # ── v1 (OpenBox DID / AIP) ──────────────────────────────────────────
     "signature_invalid": (
         "Request signature rejected (signature_invalid). The signed bytes did not "
         "match — usually a body-hash mismatch (send content= bytes, never json=) or "
@@ -142,6 +149,60 @@ _SIGNING_REASON_MESSAGES: dict[str, str] = {
     "timestamp_skew": (
         "Request timestamp outside the allowed window (timestamp_skew). Sync the host "
         "clock (NTP); signatures are valid only within ±300s."
+    ),
+    # ── v2 (Okta AI Agent) — docs/agent-identity-v2-contract.md §7 ──────
+    "assertion_missing": (
+        "No agent assertion was sent (assertion_missing). okta_ai_agent identity "
+        "requires a signed X-OpenBox-Agent-Assertion header on every v2 request."
+    ),
+    "assertion_malformed": (
+        "The agent assertion could not be parsed (assertion_malformed). Check that a "
+        "compact JWT — not JSON or a bare token — is sent."
+    ),
+    "assertion_typ_mismatch": (
+        "Assertion 'typ' did not equal 'openbox-agent-proof+jwt' (assertion_typ_mismatch)."
+    ),
+    "assertion_alg_rejected": (
+        "Assertion algorithm is not allowed (assertion_alg_rejected). Only RS256 is "
+        "supported at launch."
+    ),
+    "assertion_embedded_key_rejected": (
+        "Assertion carried an embedded jwk/jku/x5u header, which Core always rejects "
+        "(assertion_embedded_key_rejected)."
+    ),
+    "assertion_key_too_small": (
+        "Assertion signed with an RSA key below the 2048-bit minimum "
+        "(assertion_key_too_small)."
+    ),
+    "assertion_signature_invalid": (
+        "Assertion signature did not verify (assertion_signature_invalid). Usually a "
+        "body-hash mismatch (send content= bytes, never json=) or the wrong/rotated "
+        "Okta private key."
+    ),
+    "method_endpoint_mismatch": (
+        "This agent's configured verification method does not match the endpoint "
+        "version called (method_endpoint_mismatch). An okta_ai_agent identity must "
+        "call /api/v2/*; an openbox_did/legacy_unsigned identity must call /api/v1/*."
+    ),
+    "binding_invalid": (
+        "The assertion's organization/agent/credential binding did not match "
+        "(binding_invalid)."
+    ),
+    "transition_proof_invalid": (
+        "The transition intent is unknown, expired, consumed, or does not match this "
+        "agent/organization (transition_proof_invalid)."
+    ),
+    "proof_expired": (
+        "The assertion or proof-of-possession expired before Core received it "
+        "(proof_expired). Check clock sync and retry with a fresh assertion."
+    ),
+    "proof_replayed": (
+        "Assertion 'jti' was already used (proof_replayed). Each request must carry a "
+        "fresh jti; do not retry a fully-prepared request verbatim."
+    ),
+    "identity_ineligible": (
+        "The linked Okta identity or credential is not currently eligible to verify "
+        "(identity_ineligible) — inactive, unlinked, or a stale credential projection."
     ),
 }
 
