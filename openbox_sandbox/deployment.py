@@ -494,7 +494,7 @@ def _load_sandbox_deployment(
         engine_config,
         sandbox=runtime,
         clock=lambda: datetime.now(timezone.utc),
-        sandbox_id=lambda: f"sbx-{uuid.uuid4()}",
+        sandbox_id=lambda: f"sbx-{uuid.uuid4().hex[:15]}",
     )
     config = SandboxDeploymentConfig(
         deployment_id=deployment_id,
