@@ -10,27 +10,15 @@ from .errors import ProtocolValidationError
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _COMPATIBILITY = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
-_MEDIA_TYPE = re.compile(
-    r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}/"
-    r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}\Z"
-)
-_MAX_POLICY_DOCUMENT_BYTES = 1024 * 1024
-_MAX_STDOUT_BYTES = 1024 * 1024
-_MAX_STDERR_BYTES = 1024 * 1024
-_MAX_COMBINED_BYTES = 2 * 1024 * 1024
-_MAX_CHUNK_BYTES = 4 * 1024 * 1024
-_MAX_ARGV_BYTES = 1024 * 1024
 
 
-def _sha256(value: object) -> str:
-    if not isinstance(value, str) or not _SHA256.fullmatch(value):
+def _sha256(value: str) -> str:
+    if not _SHA256.fullmatch(value):
         raise ProtocolValidationError()
     return value
 
 
-def _uuid4(value: object) -> str:
-    if not isinstance(value, str):
-        raise ProtocolValidationError()
+def _uuid4(value: str) -> str:
     try:
         parsed = uuid.UUID(value)
     except (ValueError, AttributeError) as error:
@@ -40,28 +28,20 @@ def _uuid4(value: object) -> str:
     return value
 
 
-_HEX = set("0123456789abcdef")
+def generate_request_owned_id() -> str:
+    """Return `sbx-<15-lowercase-hex>` (19 chars) for OpenShell name limits."""
+    return f"sbx-{uuid.uuid4().hex[:15]}"
 
 
 def request_owned_id(value: str) -> str:
-    if not isinstance(value, str) or not value.startswith("sbx-"):
+    # OpenShell server MAX_ROUTABLE_NAME_LEN = 19. Match the Rust broker shape:
+    # sbx- + 15 lowercase hex.
+    if not isinstance(value, str) or not value.startswith("sbx-") or len(value) != 19:
         raise ProtocolValidationError()
     suffix = value[4:]
-    if len(suffix) == 15:
-        # Wire form: `sbx-<15-lowercase-hex>` (19 chars total). This matches the
-        # openbox-sandbox service contract and fits the OpenShell gateway's
-        # MAX_ROUTABLE_NAME_LEN (19). The Rust service rejects anything longer.
-        if not all(byte in _HEX for byte in suffix):
-            raise ProtocolValidationError()
-        return value
-    if len(suffix) == 36:
-        # Legacy form: `sbx-<uuid_v4>` (40 chars). Retained for back-compat
-        # with older manifest-driven deployments. The wire will refuse it
-        # when run against a real openbox-sandbox service; prefer the 19-char
-        # form above.
-        _uuid4(suffix)
-        return value
-    raise ProtocolValidationError()
+    if len(suffix) != 15 or any(c not in "0123456789abcdef" for c in suffix):
+        raise ProtocolValidationError()
+    return value
 
 
 def operation_id() -> str:
@@ -79,12 +59,7 @@ class PolicyIdentity:
     sha256: str
 
     def __post_init__(self) -> None:
-        if (
-            not isinstance(self.id, str)
-            or _COMPATIBILITY.fullmatch(self.id) is None
-            or type(self.version) is not int
-            or not 1 <= self.version <= 2**32 - 1
-        ):
+        if not self.id or self.version <= 0:
             raise ProtocolValidationError()
         _sha256(self.sha256)
 
@@ -101,20 +76,10 @@ class AssetBundleIdentity:
     compatibility_id: str
 
     def __post_init__(self) -> None:
-        if (
-            type(self.runtime_contract_version) is not int
-            or not 1 <= self.runtime_contract_version <= 2**32 - 1
-            or not isinstance(self.template, str)
-            or not self.template
-            or len(self.template.encode("utf-8")) > 4096
-            or "\x00" in self.template
-            or not isinstance(self.policy, PolicyIdentity)
-        ):
+        if self.runtime_contract_version <= 0 or not self.template:
             raise ProtocolValidationError()
         _sha256(self.adapter_build_sha256)
-        if not isinstance(self.compatibility_id, str) or not _COMPATIBILITY.fullmatch(
-            self.compatibility_id
-        ):
+        if not _COMPATIBILITY.fullmatch(self.compatibility_id):
             raise ProtocolValidationError()
 
     def to_wire(self) -> dict[str, Any]:
@@ -133,13 +98,7 @@ class PolicyDocument:
     document: bytes = field(repr=False)
 
     def __post_init__(self) -> None:
-        if (
-            not isinstance(self.media_type, str)
-            or _MEDIA_TYPE.fullmatch(self.media_type) is None
-            or type(self.document) is not bytes
-            or not self.document
-            or len(self.document) > _MAX_POLICY_DOCUMENT_BYTES
-        ):
+        if not self.media_type or not self.document:
             raise ProtocolValidationError()
 
     def to_wire(self) -> dict[str, Any]:
@@ -158,14 +117,7 @@ class CreateRequest:
 
     def __post_init__(self) -> None:
         request_owned_id(self.request_id)
-        if (
-            not isinstance(self.template, str)
-            or not self.template
-            or len(self.template.encode("utf-8")) > 4096
-            or "\x00" in self.template
-            or not isinstance(self.policy_document, PolicyDocument)
-            or not isinstance(self.expected_policy, PolicyIdentity)
-        ):
+        if not self.template:
             raise ProtocolValidationError()
 
     def to_wire(self) -> dict[str, Any]:
@@ -185,20 +137,14 @@ class OutputLimits:
     chunk_bytes: int
 
     def __post_init__(self) -> None:
-        values = (
-            self.stdout_bytes,
-            self.stderr_bytes,
-            self.combined_bytes,
-            self.chunk_bytes,
-        )
-        maxima = (
-            _MAX_STDOUT_BYTES,
-            _MAX_STDERR_BYTES,
-            _MAX_COMBINED_BYTES,
-            _MAX_CHUNK_BYTES,
-        )
-        if any(type(value) is not int for value in values) or any(
-            not 1 <= value <= maximum for value, maximum in zip(values, maxima)
+        if (
+            min(
+                self.stdout_bytes,
+                self.stderr_bytes,
+                self.combined_bytes,
+                self.chunk_bytes,
+            )
+            <= 0
         ):
             raise ProtocolValidationError()
 
@@ -226,11 +172,8 @@ class ExecRequest:
         values = tuple(argv)
         if (
             not values
-            or type(timeout) is not int
             or not 1 <= timeout <= 300
-            or not isinstance(output_limits, OutputLimits)
-            or not all(isinstance(value, str) and "\x00" not in value for value in values)
-            or sum(len(value.encode("utf-8")) for value in values) > _MAX_ARGV_BYTES
+            or not all(isinstance(value, str) for value in values)
         ):
             raise ProtocolValidationError()
         object.__setattr__(self, "argv", values)
@@ -272,7 +215,7 @@ class ExecCompleted:
             raise ProtocolValidationError()
         exit_code = value["exit_code"]
         timeout = value["timeout"]
-        if type(exit_code) is not int or not 0 <= exit_code <= 2**31 - 1:
+        if not isinstance(exit_code, int) or exit_code < 0:
             raise ProtocolValidationError()
         if timeout not in {"not_observed", "confirmed", "possible"}:
             raise ProtocolValidationError()
@@ -288,7 +231,3 @@ class ExecCompleted:
 class ServiceResponse:
     response: str
     fields: Mapping[str, Any]
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.response, str) or not isinstance(self.fields, Mapping):
-            raise ProtocolValidationError()
