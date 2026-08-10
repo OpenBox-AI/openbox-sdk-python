@@ -5,8 +5,9 @@ import os
 import stat
 import tempfile
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from openbox_sandbox.runtime import (
     AssetBundleIdentity,

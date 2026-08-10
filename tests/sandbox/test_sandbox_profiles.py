@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -105,13 +105,13 @@ def test_generic_input_rejects_raw_action_and_sensitive_field_names() -> None:
             sign(structured_payload()),
             SECRET,
             KEY_ID,
-            datetime(2025, 1, 1, tzinfo=timezone.utc),
+            datetime(2025, 1, 1, tzinfo=UTC),
         ),
         (
             sign(structured_payload()),
             SECRET,
             KEY_ID,
-            datetime(2028, 1, 1, tzinfo=timezone.utc),
+            datetime(2028, 1, 1, tzinfo=UTC),
         ),
         (sign(structured_payload(sensitive=True)), SECRET, KEY_ID, NOW),
         (sign(structured_payload(free_form=True)), SECRET, KEY_ID, NOW),

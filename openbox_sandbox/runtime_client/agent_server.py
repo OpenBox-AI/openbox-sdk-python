@@ -17,9 +17,10 @@ import os
 import signal
 import stat
 import struct
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, NoReturn
+from typing import Any, NoReturn
 
 from .agent_client import (
     AGENT_PROTOCOL_VERSION,

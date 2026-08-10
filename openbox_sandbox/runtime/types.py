@@ -3,8 +3,9 @@ from __future__ import annotations
 import base64
 import re
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .errors import ProtocolValidationError
 
@@ -198,7 +199,8 @@ class OutputLimits:
             _MAX_CHUNK_BYTES,
         )
         if any(type(value) is not int for value in values) or any(
-            not 1 <= value <= maximum for value, maximum in zip(values, maxima)
+            not 1 <= value <= maximum
+            for value, maximum in zip(values, maxima, strict=True)
         ):
             raise ProtocolValidationError()
 

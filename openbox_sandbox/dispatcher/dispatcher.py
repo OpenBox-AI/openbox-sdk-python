@@ -5,10 +5,11 @@ import hashlib
 import re
 import time
 import uuid
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any
 
 from openbox_sandbox.runtime_client import (
     AssetBundleIdentity,
@@ -200,7 +201,7 @@ class GovernedDispatcher:
             _HostExecutor(
                 _HostConfig(config.host_workdir, environment=config.host_environment)
             ),
-            lambda: datetime.now(timezone.utc),
+            lambda: datetime.now(UTC),
             time.monotonic,
             generate_request_owned_id,
         )
@@ -251,7 +252,7 @@ class GovernedDispatcher:
         profile_failure = await self._admit(command)
         if profile_failure is not None:
             return profile_failure
-        now = self._clock().astimezone(timezone.utc)
+        now = self._clock().astimezone(UTC)
         event = _activity_started(command, now)
         try:
             if self._governance is None:
@@ -366,7 +367,7 @@ class GovernedDispatcher:
     async def _admit(self, command: GovernedCommand) -> DispatchResult | None:
         if not isinstance(command, GovernedCommand):
             raise TypeError("dispatch accepts GovernedCommand only")
-        now = self._clock().astimezone(timezone.utc)
+        now = self._clock().astimezone(UTC)
         if self._config.profiles.admits(command.profile_id, command.argv, now=now):
             return None
         return await self._terminal(
@@ -1388,15 +1389,15 @@ def _image_digest(template: str) -> str:
 
 
 def _epoch_ns(value: datetime) -> int:
-    return int(value.astimezone(timezone.utc).timestamp() * 1_000_000_000)
+    return int(value.astimezone(UTC).timestamp() * 1_000_000_000)
 
 
 def _iso8601_ns(value: int) -> str:
-    return _iso8601(datetime.fromtimestamp(value / 1_000_000_000, timezone.utc))
+    return _iso8601(datetime.fromtimestamp(value / 1_000_000_000, UTC))
 
 
 def _iso8601(value: datetime) -> str:
-    return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return value.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _duration_ms(started: float, finished: float) -> int:

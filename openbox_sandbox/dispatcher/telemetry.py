@@ -5,10 +5,11 @@ import json
 import os
 import stat
 import tempfile
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Protocol
+from typing import Any, Protocol
 
 try:
     import fcntl

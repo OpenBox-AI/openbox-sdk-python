@@ -11,9 +11,10 @@ import json
 import re
 import secrets
 import threading
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, Sequence
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from .registry import GovernedCommandRegistry
@@ -56,7 +57,7 @@ def _timestamp(value: object) -> datetime:
         raise GovernedCommandReceiptError("governed command receipt rejected") from error
     if parsed.tzinfo is None:
         raise GovernedCommandReceiptError("governed command receipt rejected")
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)
 
 
 def request_arguments_sha256(request: GovernedCommandRequest) -> str:
@@ -245,7 +246,7 @@ def _validate_common_time_window(
     now = clock()
     if not isinstance(now, datetime) or now.tzinfo is None:
         raise GovernedCommandReceiptError(errors.verifier_rejected)
-    now = now.astimezone(timezone.utc)
+    now = now.astimezone(UTC)
     lifetime = expires_at - issued_at
     if (
         issued_at > now
@@ -279,7 +280,7 @@ class GovernedCommandReceiptVerifier:
 
     key_id: str
     public_key: bytes
-    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC)
     _consumed_receipt_ids: set[str] = field(default_factory=set, init=False, repr=False)
     _consumed_nonces: set[str] = field(default_factory=set, init=False, repr=False)
     _consumption_lock: threading.Lock = field(
@@ -364,7 +365,7 @@ class InsecureLocalReceiptVerifier:
     empty unsigned value) is ignored. Never use this verifier in production.
     """
 
-    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC)
     _consumed_receipt_ids: set[str] = field(default_factory=set, init=False, repr=False)
     _consumed_nonces: set[str] = field(default_factory=set, init=False, repr=False)
     _consumption_lock: threading.Lock = field(
@@ -484,10 +485,10 @@ def issue_sandbox_receipt(
     seconds = ttl.total_seconds()
     if not seconds.is_integer() or not 1 <= seconds <= _MAX_RECEIPT_LIFETIME.total_seconds():
         raise GovernedCommandReceiptError("governed command receipt issuance rejected")
-    current = now or datetime.now(timezone.utc)
+    current = now or datetime.now(UTC)
     if not isinstance(current, datetime) or current.tzinfo is None:
         raise GovernedCommandReceiptError("governed command receipt issuance rejected")
-    issued_at = current.astimezone(timezone.utc).replace(microsecond=0)
+    issued_at = current.astimezone(UTC).replace(microsecond=0)
     expires_at = issued_at + ttl
 
     profiles = registry.structured_profile_bundle()

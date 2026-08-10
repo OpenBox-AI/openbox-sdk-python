@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import base64
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from openbox_core.contracts.context import ActivityContext
-
 from openbox_sandbox import (
     CommandProfileBundle,
     InMemoryTelemetrySink,
@@ -26,7 +25,7 @@ from openbox_sandbox.runtime import (
 )
 from openbox_sandbox.telemetry import CleanupBacklog, TelemetrySink
 
-NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 17, tzinfo=UTC)
 SECRET = b"0123456789abcdef0123456789abcdef"
 KEY_ID = "profiles-2026-01"
 SANDBOX_ID = "sbx-550e8400-e29b-41d4-a716-446655440000"

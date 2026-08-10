@@ -49,7 +49,7 @@ def test_release_fails_closed_until_explicitly_loaded() -> None:
 def test_public_mutable_release_installer_is_not_exported() -> None:
     assert "install_approved_sandbox_release" not in openbox_sandbox.__all__
     with pytest.raises(AttributeError):
-        getattr(openbox_sandbox, "install_approved_sandbox_release")
+        _ = openbox_sandbox.install_approved_sandbox_release
 
 
 @pytest.mark.parametrize(

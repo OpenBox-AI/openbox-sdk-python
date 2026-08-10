@@ -4,7 +4,7 @@ import inspect
 import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -24,7 +24,7 @@ from openbox_sandbox.receipts import (
     receipt_payload,
 )
 
-NOW = datetime(2026, 7, 21, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 21, tzinfo=UTC)
 WORKFLOW_ID = "workflow-reconcile-1"
 COMMAND_ARGV = ("/usr/bin/safe", "--job", "job-1", "--count", "7")
 ASSET_BUNDLE = {

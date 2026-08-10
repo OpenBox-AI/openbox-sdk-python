@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import inspect
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -21,7 +21,7 @@ from openbox_sandbox.release import _clear_approved_sandbox_release_for_testing
 
 from .deployment_helpers import prepare_files, registry
 
-NOW = datetime(2026, 7, 23, 3, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 23, 3, 0, tzinfo=UTC)
 
 
 class ExternalSigner:
