@@ -7,7 +7,6 @@ import unittest
 from pathlib import Path
 
 from openbox_core.contracts.context import ActivityContext
-
 from openbox_sandbox import (
     CleanupBacklog,
     CleanupStatus,

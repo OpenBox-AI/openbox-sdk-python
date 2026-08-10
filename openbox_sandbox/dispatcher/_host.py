@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping
 
 from .errors import DispatchErrorCode
 from .result import TimeoutStatus

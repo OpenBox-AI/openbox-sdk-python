@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .authorization import SandboxAuthorization
 from .command import SandboxCommand
@@ -182,7 +183,7 @@ class SandboxExecutionEngine:
         self._configure(
             config,
             runtime,
-            lambda: datetime.now(timezone.utc),
+            lambda: datetime.now(UTC),
             lambda: f"sbx-{uuid.uuid4()}",
         )
 
@@ -194,7 +195,7 @@ class SandboxExecutionEngine:
         sandbox: Any,
         clock: Callable[[], datetime],
         sandbox_id: Callable[[], str] = lambda: f"sbx-{uuid.uuid4()}",
-    ) -> "SandboxExecutionEngine":
+    ) -> SandboxExecutionEngine:
         instance = cls.__new__(cls)
         instance._configure(config, sandbox, clock, sandbox_id)
         return instance
@@ -234,7 +235,7 @@ class SandboxExecutionEngine:
             authorization, SandboxAuthorization
         ):
             raise TypeError("authorized sandbox execution rejected")
-        now = self._clock().astimezone(timezone.utc)
+        now = self._clock().astimezone(UTC)
         if not self._config.profiles.admits(command.profile_id, command.argv, now=now):
             return await self._terminal(
                 command,
@@ -770,7 +771,7 @@ class SandboxExecutionEngine:
 
 
 def _iso8601(value: datetime) -> str:
-    return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return value.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _timeout_status(value: str) -> TimeoutStatus:

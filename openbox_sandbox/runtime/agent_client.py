@@ -24,9 +24,10 @@ import socket
 import stat
 import struct
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, NoReturn
+from typing import Any, NoReturn
 
 from .client import MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, PROTOCOL_VERSION
 from .errors import (
