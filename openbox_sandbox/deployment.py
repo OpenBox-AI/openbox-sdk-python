@@ -12,7 +12,7 @@ import ipaddress
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -493,7 +493,7 @@ def _load_sandbox_deployment(
     engine = SandboxExecutionEngine._from_components(
         engine_config,
         sandbox=runtime,
-        clock=lambda: datetime.now(timezone.utc),
+        clock=lambda: datetime.now(UTC),
         sandbox_id=lambda: f"sbx-{uuid.uuid4().hex[:15]}",
     )
     config = SandboxDeploymentConfig(

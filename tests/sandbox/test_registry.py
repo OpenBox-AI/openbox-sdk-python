@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -67,7 +67,7 @@ def test_registry_derives_bound_input_and_admission_from_one_identity() -> None:
         "--threshold",
         "70",
     )
-    assert admission.admits("reconcile", argv, now=datetime.now(timezone.utc))
+    assert admission.admits("reconcile", argv, now=datetime.now(UTC))
     assert structured.fingerprint == admission.fingerprint == value.fingerprint
     assert structured.bundle_version == admission.bundle_version == value.bundle_version
 

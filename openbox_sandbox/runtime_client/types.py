@@ -3,8 +3,9 @@ from __future__ import annotations
 import base64
 import re
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .errors import ProtocolValidationError
 

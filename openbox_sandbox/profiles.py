@@ -4,10 +4,11 @@ import hashlib
 import hmac
 import json
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import MappingProxyType
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .errors import ProfileValidationError
 
@@ -38,7 +39,7 @@ def _timestamp(value: object) -> datetime:
         raise ProfileValidationError() from None
     if parsed.tzinfo is None:
         raise ProfileValidationError()
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)
 
 
 def _canonical(value: object) -> bytes:
@@ -150,7 +151,10 @@ class CommandProfile:
             and not self.free_form
             and len(argv) == len(self.arguments) + 1
             and argv[0] == self.executable
-            and all(rule.accepts(value) for rule, value in zip(self.arguments, argv[1:]))
+            and all(
+                rule.accepts(value)
+                for rule, value in zip(self.arguments, argv[1:], strict=True)
+            )
         )
 
 
@@ -243,7 +247,7 @@ class CommandProfileBundle:
             raise ProfileValidationError()
         issued_at = _timestamp(payload["issued_at"])
         expires_at = _timestamp(payload["expires_at"])
-        current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        current = (now or datetime.now(UTC)).astimezone(UTC)
         if issued_at > current or expires_at <= current or issued_at >= expires_at:
             raise ProfileValidationError()
         profile_values = payload["profiles"]
@@ -278,7 +282,7 @@ class CommandProfileBundle:
         return tuple(sorted(self._profiles))
 
     def admits(self, profile_id: str, argv: Sequence[str], *, now: datetime) -> bool:
-        current = now.astimezone(timezone.utc)
+        current = now.astimezone(UTC)
         profile = self._profiles.get(profile_id)
         return (
             self.issued_at <= current < self.expires_at
@@ -341,9 +345,9 @@ def _trusted_bundle(
         or len(profiles) > 1024
     ):
         raise ProfileValidationError()
-    issued = issued_at.astimezone(timezone.utc)
-    expires = expires_at.astimezone(timezone.utc)
-    current = now.astimezone(timezone.utc)
+    issued = issued_at.astimezone(UTC)
+    expires = expires_at.astimezone(UTC)
+    current = now.astimezone(UTC)
     if issued > current or expires <= current or issued >= expires:
         raise ProfileValidationError()
     parsed: dict[str, CommandProfile] = {}
