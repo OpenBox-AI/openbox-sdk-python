@@ -188,12 +188,12 @@ class TestStrictWireParsing:
         assert result.action == "continue"
         assert result.raw["future"] == {"x": 1}
 
-    def test_preserves_retry_plan_parsing(self):
+    def test_preserves_patch_parsing(self):
         result = EvaluationResult.from_wire(
-            b'{"verdict":"block","retry_plan":{"new_input":{"attempt":2}}}'
+            b'{"verdict":"block","patch":{"new_input":{"attempt":2}}}'
         )
-        assert result.retry_plan is not None
-        assert result.retry_plan.new_input == {"attempt": 2}
+        assert result.patch is not None
+        assert result.patch.new_input == {"attempt": 2}
 
 
 class TestGuardrailsResult:
