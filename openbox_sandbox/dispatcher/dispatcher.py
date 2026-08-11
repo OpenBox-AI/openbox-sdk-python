@@ -620,6 +620,7 @@ class GovernedDispatcher:
         except SandboxServiceTransportError as error:
             cleanup_required = error.submission_state is SubmissionState.POSSIBLY_SUBMITTED
             ownership[0] = cleanup_required
+            detail = f"{error.code}: {error.message}" if getattr(error, 'message', None) else str(error.code)
             return await self._sandbox_terminal(
                 command,
                 decision,
@@ -628,6 +629,7 @@ class GovernedDispatcher:
                 Disposition.NOT_EXECUTED,
                 DispatchErrorCode.SANDBOX_CREATE,
                 None,
+                detail=detail,
             )
         except (ProtocolValidationError, ValueError, TypeError):
             return await self._sandbox_terminal(
@@ -662,6 +664,7 @@ class GovernedDispatcher:
             if state not in {"not_created", "possibly_created", "conflict"}:
                 cleanup_required = True
             ownership[0] = cleanup_required
+            detail = failure.get("detail") if isinstance(failure, dict) else None
             return await self._sandbox_terminal(
                 command,
                 decision,
@@ -670,6 +673,7 @@ class GovernedDispatcher:
                 Disposition.NOT_EXECUTED,
                 DispatchErrorCode.SANDBOX_CREATE,
                 None,
+                detail=detail,
             )
         elif response.response == "boundary_failed":
             failure = response.fields.get("failure")
@@ -677,6 +681,7 @@ class GovernedDispatcher:
                 isinstance(failure, dict) and failure.get("cleanup_target") is not None
             )
             ownership[0] = cleanup_required
+            detail = failure.get("detail") if isinstance(failure, dict) else None
             return await self._sandbox_terminal(
                 command,
                 decision,
@@ -685,6 +690,7 @@ class GovernedDispatcher:
                 Disposition.NOT_EXECUTED,
                 DispatchErrorCode.SANDBOX_CREATE,
                 None,
+                detail=detail,
             )
         else:
             ownership[0] = True
@@ -879,6 +885,7 @@ class GovernedDispatcher:
         disposition: Disposition,
         error_code: DispatchErrorCode | None,
         execution: ExecutionMetadata | None,
+        error_detail: str | None = None,
     ) -> DispatchResult:
         cleanup = (
             await self._cleanup(command, decision, sandbox_id)
@@ -1080,7 +1087,7 @@ class GovernedDispatcher:
             disposition=disposition,
             directive=directive,
             execution=execution,
-            error=None if error_code is None else NormalizedDispatchError(error_code),
+            error=None if error_code is None else NormalizedDispatchError(error_code, detail=error_detail),
             _governance=None if decision is None else decision.raw,
         )
         await self._emit(

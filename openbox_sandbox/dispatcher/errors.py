@@ -29,9 +29,13 @@ class DispatchErrorCode(str, Enum):
 @dataclass(frozen=True, slots=True)
 class NormalizedDispatchError:
     code: DispatchErrorCode
+    detail: str | None = None
 
     def to_wire(self) -> dict[str, str]:
-        return {"code": self.code.value}
+        wire: dict[str, str] = {"code": self.code.value}
+        if self.detail:
+            wire["detail"] = self.detail
+        return wire
 
 
 class DispatcherValidationError(ValueError):
