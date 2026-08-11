@@ -917,6 +917,7 @@ class GovernedDispatcher:
             Directive.CONTINUE,
             execution,
             error_code,
+            error_detail=error_detail,
         )
 
     async def _report_sandbox_result(
@@ -1082,6 +1083,7 @@ class GovernedDispatcher:
         directive: Directive,
         execution: ExecutionMetadata | None,
         error_code: DispatchErrorCode | None,
+        error_detail: str | None = None,
     ) -> DispatchResult:
         result = DispatchResult(
             disposition=disposition,
