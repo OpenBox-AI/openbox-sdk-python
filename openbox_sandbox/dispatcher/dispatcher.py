@@ -629,7 +629,7 @@ class GovernedDispatcher:
                 Disposition.NOT_EXECUTED,
                 DispatchErrorCode.SANDBOX_CREATE,
                 None,
-                detail=detail,
+                error_detail=detail,
             )
         except (ProtocolValidationError, ValueError, TypeError):
             return await self._sandbox_terminal(
@@ -673,7 +673,7 @@ class GovernedDispatcher:
                 Disposition.NOT_EXECUTED,
                 DispatchErrorCode.SANDBOX_CREATE,
                 None,
-                detail=detail,
+                error_detail=detail,
             )
         elif response.response == "boundary_failed":
             failure = response.fields.get("failure")
@@ -690,7 +690,7 @@ class GovernedDispatcher:
                 Disposition.NOT_EXECUTED,
                 DispatchErrorCode.SANDBOX_CREATE,
                 None,
-                detail=detail,
+                error_detail=detail,
             )
         else:
             ownership[0] = True
