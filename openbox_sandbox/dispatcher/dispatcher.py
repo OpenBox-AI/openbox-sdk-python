@@ -28,6 +28,7 @@ from openbox_sandbox.runtime_client import (
     generate_request_owned_id,
 )
 
+from ..command_profiles import CommandResultValidationError
 from ._host import _HostConfig, _HostExecutor, _HostFailure
 from .command import GovernedCommand
 from .errors import (
@@ -38,7 +39,6 @@ from .errors import (
 )
 from .governance import GovernanceClient, GovernanceClientConfig, GovernanceDecision
 from .profiles import CommandProfileBundle
-from ..command_profiles import CommandResultValidationError
 from .result import (
     CleanupReconciliationResult,
     CleanupStatus,
