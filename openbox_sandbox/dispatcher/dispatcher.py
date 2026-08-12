@@ -38,6 +38,7 @@ from .errors import (
 )
 from .governance import GovernanceClient, GovernanceClientConfig, GovernanceDecision
 from .profiles import CommandProfileBundle
+from ..command_profiles import CommandResultValidationError
 from .result import (
     CleanupReconciliationResult,
     CleanupStatus,
@@ -970,6 +971,14 @@ class GovernedDispatcher:
         if not _is_normal_sandbox_completion(result):
             return result
 
+        typed_result = None
+        if result.execution is not None:
+            try:
+                typed_result = self._config.profiles.parse_result(
+                    command.profile_id, result.execution.stdout
+                )
+            except CommandResultValidationError:
+                typed_result = None
         try:
             raw_completed_decision = await self._governance.evaluate(
                 _activity_completed(
@@ -977,6 +986,7 @@ class GovernedDispatcher:
                     result,
                     self._clock(),
                     duration_ns=completed_ns - started_ns,
+                    typed_result=typed_result,
                 )
             )
             completed_decision = (
@@ -1298,7 +1308,18 @@ def _activity_completed(
     now: datetime,
     *,
     duration_ns: int,
+    typed_result: object | None = None,
 ) -> dict[str, Any]:
+    execution = result.execution
+    typed_wire = None
+    if typed_result is not None:
+        typed_wire = {
+            "schema_name": typed_result.schema_name,
+            "values": [
+                {"name": item.name, "value": item.value}
+                for item in typed_result.values
+            ],
+        }
     return {
         "source": "workflow-telemetry",
         "event_type": "ActivityCompleted",
@@ -1315,9 +1336,20 @@ def _activity_completed(
         "duration_ms": duration_ns / 1_000_000,
         "activity_output": {
             "disposition": result.disposition.value,
-            "cleanup_status": result.execution.cleanup_status.value
-            if result.execution is not None
-            else CleanupStatus.NOT_NEEDED.value,
+            "directive": result.directive.value,
+            "sandbox_id": None if execution is None else execution.sandbox_id,
+            "exit_code": None if execution is None else execution.exit_code,
+            "timeout_status": (
+                None if execution is None else execution.timeout_status.value
+            ),
+            "cleanup_status": (
+                CleanupStatus.NOT_NEEDED.value
+                if execution is None
+                else execution.cleanup_status.value
+            ),
+            "stdout_bytes": 0 if execution is None else len(execution.stdout),
+            "stderr_bytes": 0 if execution is None else len(execution.stderr),
+            "typed_result": typed_wire,
         },
     }
 
