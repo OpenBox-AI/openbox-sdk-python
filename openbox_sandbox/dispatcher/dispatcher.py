@@ -1302,6 +1302,25 @@ def _sandbox_completed_hook(
     }
 
 
+_CONTENT_MAX_BYTES = 64 * 1024
+
+
+def _bounded_text(raw: bytes) -> str:
+    """Decode stdout/stderr for durable telemetry, bounded for storage.
+
+    Raw output bodies are never shipped unbounded — the profile-admitted
+    typed result is the durable business data. This text is truncated to
+    64 KiB and sanitized so the console can show what the sandbox printed
+    without admitting arbitrary-length payloads into the event store.
+    """
+    if not raw:
+        return ""
+    text = raw.decode("utf-8", errors="replace")
+    if len(raw) > _CONTENT_MAX_BYTES:
+        text = text[:_CONTENT_MAX_BYTES] + "…(truncated)"
+    return text
+
+
 def _activity_completed(
     command: GovernedCommand,
     result: DispatchResult,
@@ -1349,6 +1368,8 @@ def _activity_completed(
             ),
             "stdout_bytes": 0 if execution is None else len(execution.stdout),
             "stderr_bytes": 0 if execution is None else len(execution.stderr),
+            "stdout": _bounded_text(execution.stdout) if execution is not None else None,
+            "stderr": _bounded_text(execution.stderr) if execution is not None else None,
             "typed_result": typed_wire,
         },
     }
