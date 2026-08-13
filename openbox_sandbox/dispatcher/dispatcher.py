@@ -28,7 +28,6 @@ from openbox_sandbox.runtime_client import (
     generate_request_owned_id,
 )
 
-from ..command_profiles import CommandResultValidationError
 from ._host import _HostConfig, _HostExecutor, _HostFailure
 from .command import GovernedCommand
 from .errors import (
@@ -971,14 +970,6 @@ class GovernedDispatcher:
         if not _is_normal_sandbox_completion(result):
             return result
 
-        typed_result = None
-        if result.execution is not None:
-            try:
-                typed_result = self._config.profiles.parse_result(
-                    command.profile_id, result.execution.stdout
-                )
-            except CommandResultValidationError:
-                typed_result = None
         try:
             raw_completed_decision = await self._governance.evaluate(
                 _activity_completed(
@@ -986,7 +977,6 @@ class GovernedDispatcher:
                     result,
                     self._clock(),
                     duration_ns=completed_ns - started_ns,
-                    typed_result=typed_result,
                 )
             )
             completed_decision = (
