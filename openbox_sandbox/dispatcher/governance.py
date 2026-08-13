@@ -472,36 +472,41 @@ class GovernanceClient:
         return GovernanceDecision.parse(response)
 
     def _post(self, body: bytes) -> bytes:
+        import httpx
+
         headers = {
             "Authorization": "Bearer " + self._config.bearer_token,
             "Content-Type": "application/json",
             "X-OpenBox-SDK-Version": self._config.sdk_version,
+            # urllib's default client fingerprint is blocked by
+            # Cloudflare-style bot protection (403 code 1010); identify as
+            # the SDK so WAF rules and access logs see a stable client.
+            "User-Agent": f"OpenBox-SDK/{self._config.sdk_version}",
         }
         if self._config.request_signer is not None:
             headers.update(_validated_signer_headers(self._config.request_signer, body))
-        request = urllib.request.Request(
-            self._config.endpoint,
-            data=body,
-            method="POST",
-            headers=headers,
-        )
         try:
-            with self._opener.open(request, timeout=self._config.timeout_seconds) as response:
-                if response.status != 200:
-                    raise GovernanceTransportError()
-                content_length = response.headers.get("Content-Length")
-                if content_length is not None:
-                    try:
-                        length = int(content_length)
-                    except ValueError as error:
-                        raise GovernanceProtocolError() from error
-                    if not 1 <= length <= _MAX_RESPONSE_BYTES:
-                        raise GovernanceProtocolError()
-                body = response.read(_MAX_RESPONSE_BYTES + 1)
+            with httpx.Client(
+                timeout=self._config.timeout_seconds,
+                verify=str(self._config.ca_path) if self._config.ca_path else True,
+                follow_redirects=False,
+            ) as client:
+                response = client.post(self._config.endpoint, content=body, headers=headers)
+            if response.status_code != 200:
+                raise GovernanceTransportError()
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None:
+                try:
+                    length = int(content_length)
+                except ValueError as error:
+                    raise GovernanceProtocolError() from error
+                if not 1 <= length <= _MAX_RESPONSE_BYTES:
+                    raise GovernanceProtocolError()
+            response_body = response.content
         except GovernanceProtocolError:
             raise
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as error:
+        except (httpx.HTTPError, TimeoutError, OSError) as error:
             raise GovernanceTransportError() from error
-        if not body or len(body) > _MAX_RESPONSE_BYTES:
+        if not response_body or len(response_body) > _MAX_RESPONSE_BYTES:
             raise GovernanceProtocolError()
-        return body
+        return response_body
