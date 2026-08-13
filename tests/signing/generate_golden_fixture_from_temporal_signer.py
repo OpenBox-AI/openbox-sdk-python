@@ -23,7 +23,7 @@ import types
 from unittest import mock
 
 TEMPORAL_SIGNER = pathlib.Path(
-    "/Users/tino/code/openbox-temporal-sdk-python/openbox/request_signing.py"
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "openbox-temporal-sdk-python", "openbox", "request_signing.py")
 )
 OUT = pathlib.Path(__file__).parent / "golden_temporal_signed_request.json"
 
