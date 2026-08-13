@@ -17,14 +17,16 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
+import os
 import pathlib
 import sys
 import types
 from unittest import mock
 
+_TEMPORAL_SDK = os.environ.get("OPENBOX_TEMPORAL_SDK_PATH")
 TEMPORAL_SIGNER = pathlib.Path(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "openbox-temporal-sdk-python", "openbox", "request_signing.py")
-)
+    _TEMPORAL_SDK or str(pathlib.Path(__file__).resolve().parents[3] / "openbox-temporal-sdk-python")
+) / "openbox" / "request_signing.py"
 OUT = pathlib.Path(__file__).parent / "golden_temporal_signed_request.json"
 
 # ── Fixed inputs (deterministic) ────────────────────────────────────────────
