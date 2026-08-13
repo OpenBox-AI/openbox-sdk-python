@@ -310,7 +310,7 @@ class GovernedDispatcher:
                 DispatchErrorCode.GOVERNANCE_FALLBACK,
             )
         await self._emit(command, decision, "governance_decision_received")
-        return await self._dispatch_decision(command, decision, report_core=False)
+        return await self._dispatch_decision(command, decision, report_core=True)
 
     async def dispatch_trusted_constrain(self, command: GovernedCommand) -> DispatchResult:
         """Dispatch CONSTRAIN input from an owned application agent.
