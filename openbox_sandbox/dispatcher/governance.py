@@ -10,7 +10,6 @@ import re
 import ssl
 import urllib.error
 import urllib.parse
-import urllib.request
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -446,25 +445,9 @@ def _validated_signer_headers(signer: GovernanceRequestSigner, body: bytes) -> d
     return {canonical: normalized[lowered] for lowered, canonical in _AIP_HEADERS.items()}
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(
-        self, request: Any, file: Any, code: int, message: str, headers: Any, new_url: str
-    ) -> None:
-        return None
-
-
 class GovernanceClient:
     def __init__(self, config: GovernanceClientConfig) -> None:
         self._config = config
-        self._ssl = ssl.create_default_context(
-            cafile=str(config.ca_path) if config.ca_path else None
-        )
-        self._ssl.minimum_version = ssl.TLSVersion.TLSv1_2
-        self._opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({}),
-            urllib.request.HTTPSHandler(context=self._ssl),
-            _NoRedirect(),
-        )
 
     async def evaluate(self, event: Mapping[str, Any]) -> GovernanceDecision:
         body = _json_bytes(event)
