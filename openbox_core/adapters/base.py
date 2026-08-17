@@ -63,8 +63,8 @@ class FrameworkAdapter(Protocol):
     ) -> None:
         """Apply a started-hook CONSTRAIN effect on an async hook path.
 
-        The default is a no-op so adapters that do not implement constraints
-        preserve the historical allow-shaped behavior.
+        The default callback is a no-op, but the hook runtime still aborts the
+        intercepted host action after this callback returns.
         """
         return None
 
@@ -73,8 +73,8 @@ class FrameworkAdapter(Protocol):
     ) -> None:
         """Apply a started-hook CONSTRAIN effect on a sync hook path.
 
-        The default is a no-op so adapters that do not implement constraints
-        preserve the historical allow-shaped behavior.
+        The default callback is a no-op, but the hook runtime still aborts the
+        intercepted host action after this callback returns.
         """
         return None
 

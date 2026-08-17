@@ -119,10 +119,13 @@ class TestStartedVerdicts:
         hook_runtime = HookRuntime(build_runtime(fake_core, adapter, store))
         token = self._bound(store)
         try:
-            assert hook_runtime.preflight(FakeSpan(), hook_type=HookType.HTTP_REQUEST) is True
+            with pytest.raises(GovernanceBlockedError) as exc_info:
+                hook_runtime.preflight(FakeSpan(), hook_type=HookType.HTTP_REQUEST)
         finally:
             store.reset(token)
 
+        assert exc_info.value.verdict is Verdict.CONSTRAIN
+        assert store.is_activity_aborted(ACTIVITY_CTX.workflow_id, ACTIVITY_CTX.activity_id)
         assert len(adapter.sync_constraints) == 1
         result, context = adapter.sync_constraints[0]
         assert result.verdict is Verdict.CONSTRAIN
@@ -136,26 +139,31 @@ class TestStartedVerdicts:
         hook_runtime = HookRuntime(build_runtime(fake_core, adapter, store))
         token = self._bound(store)
         try:
-            assert (
-                await hook_runtime.apreflight(FakeSpan(), hook_type=HookType.HTTP_REQUEST) is True
-            )
+            with pytest.raises(GovernanceBlockedError) as exc_info:
+                await hook_runtime.apreflight(FakeSpan(), hook_type=HookType.HTTP_REQUEST)
         finally:
             store.reset(token)
 
+        assert exc_info.value.verdict is Verdict.CONSTRAIN
+        assert store.is_activity_aborted(ACTIVITY_CTX.workflow_id, ACTIVITY_CTX.activity_id)
         assert len(adapter.async_constraints) == 1
         result, context = adapter.async_constraints[0]
         assert result.verdict is Verdict.CONSTRAIN
         assert context is ACTIVITY_CTX
         assert adapter.sync_constraints == []
 
-    def test_constrain_adapter_without_callback_remains_noop(self, fake_core, adapter, store):
+    def test_constrain_without_callback_still_aborts_host_action(self, fake_core, adapter, store):
         fake_core.queue = [{"verdict": "constrain"}]
         hook_runtime = HookRuntime(build_runtime(fake_core, adapter, store))
         token = self._bound(store)
         try:
-            assert hook_runtime.preflight(FakeSpan(), hook_type=HookType.HTTP_REQUEST) is True
+            with pytest.raises(GovernanceBlockedError) as exc_info:
+                hook_runtime.preflight(FakeSpan(), hook_type=HookType.HTTP_REQUEST)
         finally:
             store.reset(token)
+
+        assert exc_info.value.verdict is Verdict.CONSTRAIN
+        assert store.is_activity_aborted(ACTIVITY_CTX.workflow_id, ACTIVITY_CTX.activity_id)
 
 
 class TestApprovalFlows:

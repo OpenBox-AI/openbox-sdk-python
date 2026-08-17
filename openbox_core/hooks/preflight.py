@@ -6,7 +6,7 @@ effect to the FrameworkAdapter:
 
 - started BLOCK/HALT  -> mark abort (+halt flag) -> ``adapter.raise_hook_blocked``
 - started REQUIRE_APPROVAL -> approval flow; rejected/unavailable -> blocked
-- started CONSTRAIN -> adapter constraint callback; operation still proceeds
+- started CONSTRAIN -> mark abort -> adapter constraint callback -> action-level stop
 - completed verdicts  -> ``adapter.on_completed_hook_result`` + abort/halt
   flags for FUTURE execution (the operation already ran; never undone)
 - prior abort         -> fail fast without another network call
@@ -158,12 +158,24 @@ class HookRuntime:
             )
         if verdict.requires_approval():
             return self._sync_approval(result, span)
-        if verdict is Verdict.CONSTRAIN and self._sync_constrain is not None:
-            context = resolve_context(self._store, span)
-            if self._sync_constrain_accepts_context:
-                self._sync_constrain(result, context=context)
-            else:
-                self._sync_constrain(result)
+        if verdict is Verdict.CONSTRAIN:
+            # CONSTRAIN intercepts the operation: reserve the activity abort
+            # before dispatching the replacement profile, then use the exact
+            # action-level stop seam used by BLOCK. The adapter callback may
+            # complete the replacement synchronously or reserve async work for
+            # its framework interceptor; either way the host operation never
+            # runs after this preflight.
+            self._mark_stopped(result, span)
+            if self._sync_constrain is not None:
+                context = resolve_context(self._store, span)
+                if self._sync_constrain_accepts_context:
+                    self._sync_constrain(result, context=context)
+                else:
+                    self._sync_constrain(result)
+            self._adapter.raise_hook_blocked(result)  # NoReturn by contract
+            raise GovernanceBlockedError(
+                result.verdict, result.reason or "Constrained (adapter returned)"
+            )
         return True
 
     async def _adecide_started(self, result: EvaluationResult, span: Any) -> bool:
@@ -187,12 +199,21 @@ class HookRuntime:
             else:
                 await self._adapter.handle_approval(result)
             return True
-        if verdict is Verdict.CONSTRAIN and self._async_constrain is not None:
-            context = resolve_context(self._store, span)
-            if self._async_constrain_accepts_context:
-                await self._async_constrain(result, context=context)
-            else:
-                await self._async_constrain(result)
+        if verdict is Verdict.CONSTRAIN:
+            # Match the synchronous path: mark the host action aborted first,
+            # dispatch its sandbox replacement exactly once through the adapter,
+            # then surface the same action-level stop used by BLOCK.
+            self._mark_stopped(result, span)
+            if self._async_constrain is not None:
+                context = resolve_context(self._store, span)
+                if self._async_constrain_accepts_context:
+                    await self._async_constrain(result, context=context)
+                else:
+                    await self._async_constrain(result)
+            self._adapter.raise_hook_blocked(result)  # NoReturn by contract
+            raise GovernanceBlockedError(
+                result.verdict, result.reason or "Constrained (adapter returned)"
+            )
         return True
 
     def _sync_approval(self, result: EvaluationResult, span: Any) -> bool:
