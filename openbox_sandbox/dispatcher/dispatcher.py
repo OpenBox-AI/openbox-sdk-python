@@ -1223,13 +1223,13 @@ def _sandbox_completed_hook(
         activity_id=command.activity_id,
         attempt=command.attempt,
     )
+    native_srt = bundle.template == "native://srt"
     attributes: dict[str, str | int | bool] = {
-        "sandbox.provider": "openshell",
+        "sandbox.provider": "srt" if native_srt else "openshell",
         "openbox.sandbox.profile_id": _safe_evidence_identity(command.profile_id),
         "openbox.sandbox.runtime_contract_version": bundle.runtime_contract_version,
         "openbox.sandbox.adapter_build_sha256": bundle.adapter_build_sha256,
         "openbox.sandbox.compatibility_id": _safe_evidence_identity(bundle.compatibility_id),
-        "openbox.sandbox.image_digest": _image_digest(bundle.template),
         "openbox.sandbox.template_sha256": hashlib.sha256(
             bundle.template.encode("utf-8")
         ).hexdigest(),
@@ -1250,6 +1250,8 @@ def _sandbox_completed_hook(
         "openbox.sandbox.stdout_sha256": hashlib.sha256(stdout).hexdigest(),
         "openbox.sandbox.stderr_sha256": hashlib.sha256(stderr).hexdigest(),
     }
+    if not native_srt:
+        attributes["openbox.sandbox.image_digest"] = _image_digest(bundle.template)
     if execution is not None and execution.sandbox_id is not None:
         attributes["openbox.sandbox.id"] = _safe_evidence_identity(execution.sandbox_id)
     if exit_code is not None:
