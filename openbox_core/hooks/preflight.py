@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any, NoReturn
 
 from ..adapters.base import adapter_accepts_context
@@ -26,6 +27,7 @@ from ..contracts.otel_spans import HookType, Stage
 from ..contracts.results import EvaluationResult, Verdict
 from ..errors import ContractError, GovernanceAPIError, GovernanceBlockedError
 from ..hooks.events import build_hook_event, resolve_context
+from ..otel.trace_context import format_span_id
 from ..runtime import OpenBoxRuntime
 
 logger = logging.getLogger(__name__)
@@ -167,7 +169,7 @@ class HookRuntime:
             # runs after this preflight.
             self._mark_stopped(result, span)
             if self._sync_constrain is not None:
-                context = resolve_context(self._store, span)
+                context = self._trigger_context(span)
                 if self._sync_constrain_accepts_context:
                     self._sync_constrain(result, context=context)
                 else:
@@ -205,7 +207,7 @@ class HookRuntime:
             # then surface the same action-level stop used by BLOCK.
             self._mark_stopped(result, span)
             if self._async_constrain is not None:
-                context = resolve_context(self._store, span)
+                context = self._trigger_context(span)
                 if self._async_constrain_accepts_context:
                     await self._async_constrain(result, context=context)
                 else:
@@ -215,6 +217,26 @@ class HookRuntime:
                 result.verdict, result.reason or "Constrained (adapter returned)"
             )
         return True
+
+    def _trigger_context(self, span: Any):
+        """Return the activity context annotated with the triggering span id."""
+        context = resolve_context(self._store, span)
+        if context is None:
+            return None
+        try:
+            span_context = span.get_span_context()
+            span_id = getattr(span_context, "span_id", None)
+        except Exception:
+            span_id = None
+        if not isinstance(span_id, int) or span_id == 0:
+            return context
+        return replace(
+            context,
+            metadata={
+                **context.metadata,
+                "openbox.trigger_span_id": format_span_id(span_id),
+            },
+        )
 
     def _sync_approval(self, result: EvaluationResult, span: Any) -> bool:
         """Sync approval: adapter-native flow first, core poller fallback.

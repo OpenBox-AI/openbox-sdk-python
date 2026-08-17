@@ -1260,7 +1260,7 @@ def _sandbox_completed_hook(
     span: dict[str, Any] = {
         "span_id": span_id,
         "trace_id": trace_id,
-        "parent_span_id": None,
+        "parent_span_id": command.parent_span_id,
         "name": "openbox.sandbox_execution",
         "kind": "INTERNAL",
         "stage": "completed",

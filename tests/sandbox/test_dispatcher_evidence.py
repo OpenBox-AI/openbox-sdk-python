@@ -22,6 +22,7 @@ def _completed_hook(template: str) -> dict:
         task_queue="payment-demo",
         profile_id="post-batch",
         argv=("/usr/bin/curl", "https://example.com/"),
+        parent_span_id="00f067aa0ba902b7",
     )
     result = DispatchResult(
         disposition=Disposition.EXECUTED_IN_SANDBOX,
@@ -67,6 +68,7 @@ def test_native_srt_completion_emits_persistable_sandbox_hook() -> None:
     assert span["name"] == "openbox.sandbox_execution"
     assert span["hook_type"] == "sandbox_execution"
     assert span["stage"] == "completed"
+    assert span["parent_span_id"] == "00f067aa0ba902b7"
     assert span["attributes"]["sandbox.provider"] == "srt"
     assert span["attributes"]["openbox.sandbox.profile_id"] == "post-batch"
     assert (

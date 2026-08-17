@@ -13,6 +13,18 @@ def _identifier(value: object) -> str:
     return value
 
 
+def _parent_span_id(value: object) -> str | None:
+    if value is None:
+        return None
+    if (
+        not isinstance(value, str)
+        or len(value) != 16
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise DispatcherValidationError()
+    return value
+
+
 @dataclass(frozen=True, slots=True, repr=False, init=False)
 class GovernedCommand:
     workflow_id: str
@@ -25,6 +37,7 @@ class GovernedCommand:
     task_queue: str
     attempt: int
     arguments: Mapping[str, Any]
+    parent_span_id: str | None
 
     def __init__(
         self,
@@ -39,6 +52,7 @@ class GovernedCommand:
         task_queue: str = "generic",
         attempt: int = 1,
         arguments: Mapping[str, Any] | None = None,
+        parent_span_id: str | None = None,
     ) -> None:
         if isinstance(argv, (str, bytes, bytearray, Mapping)):
             raise DispatcherValidationError()
@@ -67,6 +81,7 @@ class GovernedCommand:
         object.__setattr__(self, "task_queue", _identifier(task_queue))
         object.__setattr__(self, "attempt", 1)
         object.__setattr__(self, "arguments", dict(arguments or {}))
+        object.__setattr__(self, "parent_span_id", _parent_span_id(parent_span_id))
 
     def __repr__(self) -> str:
         return (

@@ -12,7 +12,7 @@ from openbox_core.errors import GovernanceBlockedError, GovernanceHaltError
 from openbox_core.hooks.preflight import HookRuntime
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent / "wire"))
-from span_fixtures import FakeSpan  # noqa: E402
+from span_fixtures import SPAN_ID, FakeSpan  # noqa: E402
 
 
 class TestSkipSemantics:
@@ -130,7 +130,8 @@ class TestStartedVerdicts:
         result, context = adapter.sync_constraints[0]
         assert result.verdict is Verdict.CONSTRAIN
         assert result.raw["age_result"]["profile_id"] == "p-1"
-        assert context is ACTIVITY_CTX
+        assert context.workflow_id == ACTIVITY_CTX.workflow_id
+        assert context.metadata["openbox.trigger_span_id"] == format(SPAN_ID, "016x")
         assert adapter.async_constraints == []
 
     async def test_async_constrain_delegates_once_with_result_and_context(self, fake_core, store):
@@ -149,7 +150,8 @@ class TestStartedVerdicts:
         assert len(adapter.async_constraints) == 1
         result, context = adapter.async_constraints[0]
         assert result.verdict is Verdict.CONSTRAIN
-        assert context is ACTIVITY_CTX
+        assert context.workflow_id == ACTIVITY_CTX.workflow_id
+        assert context.metadata["openbox.trigger_span_id"] == format(SPAN_ID, "016x")
         assert adapter.sync_constraints == []
 
     def test_constrain_without_callback_still_aborts_host_action(self, fake_core, adapter, store):
