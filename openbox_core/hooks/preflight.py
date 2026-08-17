@@ -6,6 +6,7 @@ effect to the FrameworkAdapter:
 
 - started BLOCK/HALT  -> mark abort (+halt flag) -> ``adapter.raise_hook_blocked``
 - started REQUIRE_APPROVAL -> approval flow; rejected/unavailable -> blocked
+- started CONSTRAIN -> adapter constraint callback; operation still proceeds
 - completed verdicts  -> ``adapter.on_completed_hook_result`` + abort/halt
   flags for FUTURE execution (the operation already ran; never undone)
 - prior abort         -> fail fast without another network call
@@ -47,6 +48,10 @@ class HookRuntime:
             self._adapter.on_completed_hook_result
         )
         self._approval_accepts_context = adapter_accepts_context(self._adapter.handle_approval)
+        self._async_constrain = getattr(self._adapter, "handle_constrain", None)
+        self._sync_constrain = getattr(self._adapter, "handle_constrain_sync", None)
+        self._async_constrain_accepts_context = adapter_accepts_context(self._async_constrain)
+        self._sync_constrain_accepts_context = adapter_accepts_context(self._sync_constrain)
         hitl = runtime.config.hitl
         self._sync_poller: ApprovalPoller | None = None
         if hitl.enabled:
@@ -153,6 +158,12 @@ class HookRuntime:
             )
         if verdict.requires_approval():
             return self._sync_approval(result, span)
+        if verdict is Verdict.CONSTRAIN and self._sync_constrain is not None:
+            context = resolve_context(self._store, span)
+            if self._sync_constrain_accepts_context:
+                self._sync_constrain(result, context=context)
+            else:
+                self._sync_constrain(result)
         return True
 
     async def _adecide_started(self, result: EvaluationResult, span: Any) -> bool:
@@ -176,6 +187,12 @@ class HookRuntime:
             else:
                 await self._adapter.handle_approval(result)
             return True
+        if verdict is Verdict.CONSTRAIN and self._async_constrain is not None:
+            context = resolve_context(self._store, span)
+            if self._async_constrain_accepts_context:
+                await self._async_constrain(result, context=context)
+            else:
+                await self._async_constrain(result)
         return True
 
     def _sync_approval(self, result: EvaluationResult, span: Any) -> bool:

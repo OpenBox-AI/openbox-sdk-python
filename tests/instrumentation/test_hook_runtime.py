@@ -5,6 +5,7 @@ import sys
 import pytest
 from conftest import ACTIVITY_CTX, FakeCore, build_runtime
 
+from openbox_core.conformance.hook_preflight import RecordingHookAdapter
 from openbox_core.contracts.otel_spans import HookType
 from openbox_core.contracts.results import Verdict
 from openbox_core.errors import GovernanceBlockedError, GovernanceHaltError
@@ -39,6 +40,19 @@ class TestSkipSemantics:
             assert fake_core.payloads == []
         finally:
             store.reset(token)
+
+
+class _ConstrainRecordingAdapter(RecordingHookAdapter):
+    def __init__(self):
+        super().__init__()
+        self.async_constraints = []
+        self.sync_constraints = []
+
+    async def handle_constrain(self, result, context=None):
+        self.async_constraints.append((result, context))
+
+    def handle_constrain_sync(self, result, context=None):
+        self.sync_constraints.append((result, context))
 
 
 class TestStartedVerdicts:
@@ -98,6 +112,50 @@ class TestStartedVerdicts:
         finally:
             store.reset(token)
         assert fake_core.payloads == []  # short-circuited BEFORE any send
+
+    def test_sync_constrain_delegates_once_with_result_and_context(self, fake_core, store):
+        fake_core.queue = [{"verdict": "constrain", "age_result": {"profile_id": "p-1"}}]
+        adapter = _ConstrainRecordingAdapter()
+        hook_runtime = HookRuntime(build_runtime(fake_core, adapter, store))
+        token = self._bound(store)
+        try:
+            assert hook_runtime.preflight(FakeSpan(), hook_type=HookType.HTTP_REQUEST) is True
+        finally:
+            store.reset(token)
+
+        assert len(adapter.sync_constraints) == 1
+        result, context = adapter.sync_constraints[0]
+        assert result.verdict is Verdict.CONSTRAIN
+        assert result.raw["age_result"]["profile_id"] == "p-1"
+        assert context is ACTIVITY_CTX
+        assert adapter.async_constraints == []
+
+    async def test_async_constrain_delegates_once_with_result_and_context(self, fake_core, store):
+        fake_core.queue = [{"verdict": "constrain", "age_result": {"profile_id": "p-1"}}]
+        adapter = _ConstrainRecordingAdapter()
+        hook_runtime = HookRuntime(build_runtime(fake_core, adapter, store))
+        token = self._bound(store)
+        try:
+            assert (
+                await hook_runtime.apreflight(FakeSpan(), hook_type=HookType.HTTP_REQUEST) is True
+            )
+        finally:
+            store.reset(token)
+
+        assert len(adapter.async_constraints) == 1
+        result, context = adapter.async_constraints[0]
+        assert result.verdict is Verdict.CONSTRAIN
+        assert context is ACTIVITY_CTX
+        assert adapter.sync_constraints == []
+
+    def test_constrain_adapter_without_callback_remains_noop(self, fake_core, adapter, store):
+        fake_core.queue = [{"verdict": "constrain"}]
+        hook_runtime = HookRuntime(build_runtime(fake_core, adapter, store))
+        token = self._bound(store)
+        try:
+            assert hook_runtime.preflight(FakeSpan(), hook_type=HookType.HTTP_REQUEST) is True
+        finally:
+            store.reset(token)
 
 
 class TestApprovalFlows:
