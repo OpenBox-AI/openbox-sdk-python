@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -34,11 +35,20 @@ def _dispatch_id(
                 profile_id,
             )
         ).encode("utf-8")
-        return hashlib.sha256(identity).hexdigest()
+        digest = hashlib.sha256(identity).digest()
+        # The durable PROD-250 boundary admits canonical RFC 4122 UUIDv4 IDs.
+        # Set the version/variant bits on deterministic digest bytes so retries
+        # can reconstruct the same identity without weakening that contract.
+        return str(uuid.UUID(bytes=digest[:16], version=4))
+    try:
+        parsed = uuid.UUID(value) if isinstance(value, str) else None
+    except ValueError as error:
+        raise DispatcherValidationError() from error
     if (
-        not isinstance(value, str)
-        or len(value) != 64
-        or any(character not in "0123456789abcdef" for character in value)
+        parsed is None
+        or parsed.version != 4
+        or parsed.variant != uuid.RFC_4122
+        or str(parsed) != value
     ):
         raise DispatcherValidationError()
     return value

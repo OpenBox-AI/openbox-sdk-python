@@ -88,6 +88,9 @@ _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _IMAGE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _SPAN_ID = re.compile(r"[0-9a-f]{16}\Z")
 _TRACE_ID = re.compile(r"[0-9a-f]{32}\Z")
+_DISPATCH_ID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z"
+)
 _SANDBOX_EGRESS_ATTRIBUTE = re.compile(
     r"openbox\.sandbox\.egress\.(?:0|[1-9][0-9]{0,2})\.(?:decision|host|port)\Z"
 )
@@ -207,7 +210,8 @@ def _check_sandbox_span(span: dict[str, Any], index: int) -> None:
             "openbox.sandbox.dispatch_id" in attributes
             and (
                 not isinstance(attributes["openbox.sandbox.dispatch_id"], str)
-                or _SHA256.fullmatch(attributes["openbox.sandbox.dispatch_id"]) is None
+                or _DISPATCH_ID.fullmatch(attributes["openbox.sandbox.dispatch_id"])
+                is None
             )
         )
     ):

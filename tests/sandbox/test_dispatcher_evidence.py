@@ -138,7 +138,7 @@ def test_native_srt_completion_emits_persistable_sandbox_hook() -> None:
     assert span["attributes"]["openbox.sandbox.provider"] == "srt"
     assert span["attributes"]["openbox.sandbox.profile_id"] == "post-batch"
     assert span["attributes"]["openbox.sandbox.dispatch_id"] == (
-        "30d35aa3252c8c9e8602c85bddaefa7687b0f73e1f7a6d810ed5ca81bc3fd522"
+        "30d35aa3-252c-4c9e-8602-c85bddaefa76"
     )
     assert (
         span["attributes"]["openbox.sandbox.disposition"]
