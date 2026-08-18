@@ -1260,7 +1260,12 @@ def _sandbox_completed_hook(
     span: dict[str, Any] = {
         "span_id": span_id,
         "trace_id": trace_id,
-        "parent_span_id": command.parent_span_id,
+        "parent_span_id": command.parent_span_id or _activity_root_span_id(
+            workflow_id=command.workflow_id,
+            run_id=command.run_id,
+            activity_id=command.activity_id,
+            attempt=command.attempt,
+        ),
         "name": "openbox.sandbox_execution",
         "kind": "INTERNAL",
         "stage": "completed",
@@ -1422,6 +1427,20 @@ def _sandbox_span_ids(
         hashlib.sha256(identity).hexdigest()[:16],
         hashlib.sha256(b"trace|" + identity).hexdigest()[:32],
     )
+
+
+def _activity_root_span_id(
+    *,
+    workflow_id: str,
+    run_id: str,
+    activity_id: str,
+    attempt: int,
+) -> str:
+    """Match Core's stable parent anchor when an adapter has no live OTel root."""
+    identity = "|".join(
+        (workflow_id, run_id, activity_id, str(attempt), "activity_root")
+    ).encode("utf-8")
+    return hashlib.sha256(identity).hexdigest()[:16]
 
 
 def _safe_evidence_identity(value: str) -> str:

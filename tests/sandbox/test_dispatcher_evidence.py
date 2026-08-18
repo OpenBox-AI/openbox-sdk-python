@@ -13,7 +13,7 @@ from openbox_sandbox.dispatcher.result import (
 from openbox_sandbox.runtime_client import AssetBundleIdentity, PolicyIdentity
 
 
-def _completed_hook(template: str) -> dict:
+def _completed_hook(template: str, *, parent_span_id: str | None = "00f067aa0ba902b7") -> dict:
     command = GovernedCommand(
         workflow_id="workflow-1",
         run_id="run-1",
@@ -22,7 +22,7 @@ def _completed_hook(template: str) -> dict:
         task_queue="payment-demo",
         profile_id="post-batch",
         argv=("/usr/bin/curl", "https://example.com/"),
-        parent_span_id="00f067aa0ba902b7",
+        parent_span_id=parent_span_id,
     )
     result = DispatchResult(
         disposition=Disposition.EXECUTED_IN_SANDBOX,
@@ -76,6 +76,16 @@ def test_native_srt_completion_emits_persistable_sandbox_hook() -> None:
         == "executed_in_sandbox"
     )
     assert "openbox.sandbox.image_digest" not in span["attributes"]
+
+
+def test_completion_derives_stable_activity_parent_without_adapter_context() -> None:
+    first = _completed_hook("native://srt", parent_span_id=None)
+    second = _completed_hook("native://srt", parent_span_id=None)
+
+    parent_span_id = first["spans"][0]["parent_span_id"]
+    assert parent_span_id == second["spans"][0]["parent_span_id"]
+    assert isinstance(parent_span_id, str)
+    assert len(parent_span_id) == 16
 
 
 def test_openshell_completion_keeps_immutable_image_evidence() -> None:
