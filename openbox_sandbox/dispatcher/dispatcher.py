@@ -1225,7 +1225,7 @@ def _sandbox_completed_hook(
     )
     native_srt = bundle.template == "native://srt"
     attributes: dict[str, str | int | bool] = {
-        "sandbox.provider": "srt" if native_srt else "openshell",
+        "openbox.sandbox.provider": "srt" if native_srt else "openshell",
         "openbox.sandbox.profile_id": _safe_evidence_identity(command.profile_id),
         "openbox.sandbox.runtime_contract_version": bundle.runtime_contract_version,
         "openbox.sandbox.adapter_build_sha256": bundle.adapter_build_sha256,

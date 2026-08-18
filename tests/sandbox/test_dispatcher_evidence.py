@@ -69,7 +69,7 @@ def test_native_srt_completion_emits_persistable_sandbox_hook() -> None:
     assert span["hook_type"] == "sandbox_execution"
     assert span["stage"] == "completed"
     assert span["parent_span_id"] == "00f067aa0ba902b7"
-    assert span["attributes"]["sandbox.provider"] == "srt"
+    assert span["attributes"]["openbox.sandbox.provider"] == "srt"
     assert span["attributes"]["openbox.sandbox.profile_id"] == "post-batch"
     assert (
         span["attributes"]["openbox.sandbox.disposition"]
@@ -92,5 +92,5 @@ def test_openshell_completion_keeps_immutable_image_evidence() -> None:
     event = _completed_hook("registry.invalid/openbox@sha256:" + "c" * 64)
     attributes = event["spans"][0]["attributes"]
 
-    assert attributes["sandbox.provider"] == "openshell"
+    assert attributes["openbox.sandbox.provider"] == "openshell"
     assert attributes["openbox.sandbox.image_digest"] == "sha256:" + "c" * 64

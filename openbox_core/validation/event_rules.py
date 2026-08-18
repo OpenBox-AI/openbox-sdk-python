@@ -35,6 +35,8 @@ _REQUIRED_HANDOFF_FIELDS = ("from_agent_did", "multi_agent_session_id")
 _SANDBOX_HOOK_TYPE = "sandbox_execution"
 _SANDBOX_SAFE_ATTRIBUTES = frozenset(
     {
+        "openbox.sandbox.provider",
+        # Backward compatibility for spans emitted before the provider key was namespaced.
         "sandbox.provider",
         "openbox.sandbox.profile_id",
         "openbox.sandbox.compatibility_id",
