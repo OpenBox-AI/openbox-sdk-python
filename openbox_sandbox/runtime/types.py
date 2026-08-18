@@ -254,23 +254,35 @@ class ExecRequest:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class EgressDecisionEvidence:
+    decision: str
+    host: str
+    port: int
+
+
 @dataclass(frozen=True, slots=True, repr=False)
 class ExecCompleted:
     exit_code: int
     stdout: bytes
     stderr: bytes
     timeout: str
+    egress_decisions: tuple[EgressDecisionEvidence, ...] = ()
+    violation_count: int | None = None
+    violation_categories: tuple[str, ...] = ()
 
     def __repr__(self) -> str:
         return (
             f"ExecCompleted(exit_code={self.exit_code}, "
             f"stdout_bytes={len(self.stdout)}, stderr_bytes={len(self.stderr)}, "
-            f"timeout={self.timeout!r})"
+            f"timeout={self.timeout!r}, egress_decisions={len(self.egress_decisions)}, "
+            f"violation_count={self.violation_count!r})"
         )
 
     @classmethod
     def from_wire(cls, value: Mapping[str, Any]) -> ExecCompleted:
-        if set(value) != {"exit_code", "stdout_base64", "stderr_base64", "timeout"}:
+        required = {"exit_code", "stdout_base64", "stderr_base64", "timeout"}
+        if not required <= set(value) <= required | {"sandbox_evidence"}:
             raise ProtocolValidationError()
         exit_code = value["exit_code"]
         timeout = value["timeout"]
@@ -278,12 +290,73 @@ class ExecCompleted:
             raise ProtocolValidationError()
         if timeout not in {"not_observed", "confirmed", "possible"}:
             raise ProtocolValidationError()
+        egress_decisions, violation_count, violation_categories = _sandbox_evidence(
+            value.get("sandbox_evidence")
+        )
         try:
             stdout = base64.b64decode(value["stdout_base64"], validate=True)
             stderr = base64.b64decode(value["stderr_base64"], validate=True)
         except (ValueError, TypeError) as error:
             raise ProtocolValidationError() from error
-        return cls(exit_code=exit_code, stdout=stdout, stderr=stderr, timeout=timeout)
+        return cls(
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            timeout=timeout,
+            egress_decisions=egress_decisions,
+            violation_count=violation_count,
+            violation_categories=violation_categories,
+        )
+
+
+def _sandbox_evidence(
+    value: object,
+) -> tuple[tuple[EgressDecisionEvidence, ...], int | None, tuple[str, ...]]:
+    if value is None:
+        return (), None, ()
+    if not isinstance(value, Mapping) or set(value) != {"egress_decisions", "violation"}:
+        raise ProtocolValidationError()
+    raw_egress = value["egress_decisions"]
+    if not isinstance(raw_egress, list) or len(raw_egress) > 128:
+        raise ProtocolValidationError()
+    egress: list[EgressDecisionEvidence] = []
+    for raw in raw_egress:
+        if not isinstance(raw, Mapping) or set(raw) != {"decision", "host", "port"}:
+            raise ProtocolValidationError()
+        decision, host, port = raw["decision"], raw["host"], raw["port"]
+        if (
+            decision not in {"allowed", "denied"}
+            or not isinstance(host, str)
+            or not host
+            or type(port) is not int
+            or not 0 <= port <= 65535
+        ):
+            raise ProtocolValidationError()
+        egress.append(EgressDecisionEvidence(decision, host, port))
+    raw_violation = value["violation"]
+    if raw_violation is None:
+        return tuple(egress), None, ()
+    if (
+        not isinstance(raw_violation, Mapping)
+        or set(raw_violation) != {"count", "categories"}
+    ):
+        raise ProtocolValidationError()
+    count, categories = raw_violation["count"], raw_violation["categories"]
+    allowed_categories = {
+        "denied_file_write",
+        "denied_file_read",
+        "denied_network",
+        "denied_process",
+        "other",
+    }
+    if (
+        type(count) is not int
+        or count < 0
+        or not isinstance(categories, list)
+        or not all(category in allowed_categories for category in categories)
+    ):
+        raise ProtocolValidationError()
+    return tuple(egress), count, tuple(categories)
 
 
 @dataclass(frozen=True, slots=True)

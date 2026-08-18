@@ -59,6 +59,33 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(result.stderr, b"\xfe\x00")
         self.assertNotIn("xff", repr(result))
 
+    def test_exec_result_preserves_sandbox_egress_and_violation_evidence(self) -> None:
+        result = ExecCompleted.from_wire(
+            {
+                "exit_code": 7,
+                "stdout_base64": "",
+                "stderr_base64": "",
+                "timeout": "not_observed",
+                "sandbox_evidence": {
+                    "egress_decisions": [
+                        {"decision": "denied", "host": "blocked.example", "port": 443},
+                        {"decision": "allowed", "host": "api.example", "port": 8443},
+                    ],
+                    "violation": {
+                        "count": 2,
+                        "categories": ["denied_network", "denied_file_write"],
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(result.egress_decisions[0].host, "blocked.example")
+        self.assertEqual(result.egress_decisions[0].decision, "denied")
+        self.assertEqual(result.violation_count, 2)
+        self.assertEqual(
+            result.violation_categories, ("denied_network", "denied_file_write")
+        )
+
     def test_invalid_identifiers_base64_and_unknown_result_fields_fail_closed(self) -> None:
         with self.assertRaises(ProtocolValidationError):
             request_owned_id("sbx-not-a-uuid")

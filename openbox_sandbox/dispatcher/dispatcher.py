@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import re
 import time
 import uuid
@@ -32,6 +33,7 @@ from ._host import _HostConfig, _HostExecutor, _HostFailure
 from .command import GovernedCommand
 from .errors import (
     DispatchErrorCode,
+    DispatcherValidationError,
     GovernanceProtocolError,
     GovernanceTransportError,
     NormalizedDispatchError,
@@ -240,6 +242,9 @@ class GovernedDispatcher:
         self._monotonic = monotonic
         self._sandbox_id = sandbox_id
         self._telemetry = config.telemetry or NullTelemetrySink()
+        self._dispatch_tasks: dict[
+            str, tuple[str, asyncio.Task[DispatchResult]]
+        ] = {}
 
     @property
     def governance_signer_did(self) -> str | None:
@@ -279,7 +284,7 @@ class GovernedDispatcher:
                 DispatchErrorCode.GOVERNANCE_PROTOCOL,
             )
         await self._emit(command, decision, "governance_decision_received")
-        return await self._dispatch_decision(command, decision, report_core=True)
+        return await self._dispatch_decision_once(command, decision, report_core=True)
 
     async def dispatch_with_decision(
         self, command: GovernedCommand, decision: GovernanceDecision
@@ -309,7 +314,7 @@ class GovernedDispatcher:
                 DispatchErrorCode.GOVERNANCE_FALLBACK,
             )
         await self._emit(command, decision, "governance_decision_received")
-        return await self._dispatch_decision(command, decision, report_core=True)
+        return await self._dispatch_decision_once(command, decision, report_core=True)
 
     async def dispatch_trusted_constrain(self, command: GovernedCommand) -> DispatchResult:
         """Dispatch CONSTRAIN input from an owned application agent.
@@ -335,7 +340,7 @@ class GovernedDispatcher:
             }
         )
         await self._emit(command, decision, "trusted_application_input_accepted")
-        return await self._dispatch_decision(command, decision, report_core=False)
+        return await self._dispatch_decision_once(command, decision, report_core=False)
 
     async def dispatch_authorized_constrain(
         self, command: GovernedCommand, *, authorization_id: str
@@ -362,7 +367,7 @@ class GovernedDispatcher:
             }
         )
         await self._emit(command, decision, "authorization_receipt_accepted")
-        return await self._dispatch_decision(command, decision, report_core=False)
+        return await self._dispatch_decision_once(command, decision, report_core=False)
 
     async def _admit(self, command: GovernedCommand) -> DispatchResult | None:
         if not isinstance(command, GovernedCommand):
@@ -378,6 +383,44 @@ class GovernedDispatcher:
             None,
             DispatchErrorCode.PROFILE_REJECTED,
         )
+
+    async def _dispatch_decision_once(
+        self,
+        command: GovernedCommand,
+        decision: GovernanceDecision,
+        *,
+        report_core: bool,
+    ) -> DispatchResult:
+        """Reuse one executor task for duplicate submissions of a dispatch ID."""
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "workflow_id": command.workflow_id,
+                    "run_id": command.run_id,
+                    "activity_id": command.activity_id,
+                    "argv": command.argv,
+                    "profile_id": command.profile_id,
+                    "timeout_seconds": command.timeout_seconds,
+                    "attempt": command.attempt,
+                    "arguments": command.arguments,
+                },
+                allow_nan=False,
+                default=str,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        existing = self._dispatch_tasks.get(command.dispatch_id)
+        if existing is not None:
+            existing_fingerprint, task = existing
+            if existing_fingerprint != fingerprint:
+                raise DispatcherValidationError()
+            return await asyncio.shield(task)
+        task = asyncio.create_task(
+            self._dispatch_decision(command, decision, report_core=report_core)
+        )
+        self._dispatch_tasks[command.dispatch_id] = (fingerprint, task)
+        return await asyncio.shield(task)
 
     async def _dispatch_decision(
         self,
@@ -825,6 +868,9 @@ class GovernedDispatcher:
                 stderr=completed.stderr,
                 timeout_status=_timeout_status(completed.timeout),
                 cleanup_status=CleanupStatus.FAILED,
+                egress_decisions=completed.egress_decisions,
+                violation_count=completed.violation_count,
+                violation_categories=completed.violation_categories,
             )
             await self._emit(
                 command,
@@ -909,6 +955,9 @@ class GovernedDispatcher:
                 stderr=execution.stderr,
                 timeout_status=execution.timeout_status,
                 cleanup_status=cleanup,
+                egress_decisions=execution.egress_decisions,
+                violation_count=execution.violation_count,
+                violation_categories=execution.violation_categories,
             )
         return await self._terminal(
             command,
@@ -1180,6 +1229,7 @@ def _activity_started(command: GovernedCommand, now: datetime) -> dict[str, Any]
         "activity_type": "openbox_governed_command",
         "attempt": command.attempt,
         "profile_id": command.profile_id,
+        "metadata": {"openbox.sandbox.dispatch_id": command.dispatch_id},
         "activity_input": [{"argv": list(command.argv)}],
         "operation": {
             "profile_id": command.profile_id,
@@ -1227,6 +1277,7 @@ def _sandbox_completed_hook(
     attributes: dict[str, str | int | bool] = {
         "openbox.sandbox.provider": "srt" if native_srt else "openshell",
         "openbox.sandbox.profile_id": _safe_evidence_identity(command.profile_id),
+        "openbox.sandbox.dispatch_id": command.dispatch_id,
         "openbox.sandbox.runtime_contract_version": bundle.runtime_contract_version,
         "openbox.sandbox.adapter_build_sha256": bundle.adapter_build_sha256,
         "openbox.sandbox.compatibility_id": _safe_evidence_identity(bundle.compatibility_id),
@@ -1256,6 +1307,18 @@ def _sandbox_completed_hook(
         attributes["openbox.sandbox.id"] = _safe_evidence_identity(execution.sandbox_id)
     if exit_code is not None:
         attributes["openbox.sandbox.exit_code"] = exit_code
+    if execution is not None:
+        attributes["openbox.sandbox.egress.count"] = len(execution.egress_decisions)
+        for index, egress in enumerate(execution.egress_decisions):
+            prefix = f"openbox.sandbox.egress.{index}"
+            attributes[f"{prefix}.decision"] = egress.decision
+            attributes[f"{prefix}.host"] = _safe_evidence_identity(egress.host)
+            attributes[f"{prefix}.port"] = egress.port
+        if execution.violation_count is not None:
+            attributes["openbox.sandbox.violations.count"] = execution.violation_count
+            attributes["openbox.sandbox.violations.categories"] = ",".join(
+                execution.violation_categories
+            )
 
     span: dict[str, Any] = {
         "span_id": span_id,
