@@ -53,3 +53,7 @@ uv sync --all-extras
 uv run pytest
 uv run ruff check .
 ```
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
