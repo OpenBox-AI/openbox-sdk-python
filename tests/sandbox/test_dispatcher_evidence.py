@@ -55,7 +55,7 @@ def _completed_hook(template: str, *, parent_span_id: str | None = "00f067aa0ba9
         adapter_build_sha256="a" * 64,
         template=template,
         policy=PolicyIdentity("openbox-allow-network-dev", 1, "b" * 64),
-        compatibility_id="native-srt-v1",
+        compatibility_id="native-v1",
     )
     config = SimpleNamespace(
         sandbox=SimpleNamespace(asset_bundle=bundle),
@@ -124,8 +124,8 @@ async def test_duplicate_dispatch_identity_executes_once() -> None:
     dispatcher._dispatch_decision.assert_awaited_once()
 
 
-def test_native_srt_completion_emits_persistable_sandbox_hook() -> None:
-    event = _completed_hook("native://srt")
+def test_native_completion_emits_persistable_sandbox_hook() -> None:
+    event = _completed_hook("native://native")
 
     assert event["event_type"] == "ActivityStarted"
     assert event["hook_trigger"] is True
@@ -135,7 +135,7 @@ def test_native_srt_completion_emits_persistable_sandbox_hook() -> None:
     assert span["hook_type"] == "sandbox_execution"
     assert span["stage"] == "completed"
     assert span["parent_span_id"] == "00f067aa0ba902b7"
-    assert span["attributes"]["openbox.sandbox.provider"] == "srt"
+    assert span["attributes"]["openbox.sandbox.provider"] == "native"
     assert span["attributes"]["openbox.sandbox.profile_id"] == "post-batch"
     assert span["attributes"]["openbox.sandbox.dispatch_id"] == (
         "30d35aa3-252c-4c9e-8602-c85bddaefa76"
@@ -156,8 +156,8 @@ def test_native_srt_completion_emits_persistable_sandbox_hook() -> None:
 
 
 def test_completion_derives_stable_activity_parent_without_adapter_context() -> None:
-    first = _completed_hook("native://srt", parent_span_id=None)
-    second = _completed_hook("native://srt", parent_span_id=None)
+    first = _completed_hook("native://native", parent_span_id=None)
+    second = _completed_hook("native://native", parent_span_id=None)
 
     parent_span_id = first["spans"][0]["parent_span_id"]
     assert parent_span_id == second["spans"][0]["parent_span_id"]
