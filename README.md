@@ -78,8 +78,12 @@ than sending an assertion that could only be rejected:
 ```python
 document = client.refresh_identity_metadata()   # async: await client.arefresh_identity_metadata()
 print(document.okta.credential_kid)
+print(document.authority.activation_version)
 ```
 
+The document also carries required, non-secret assignment, provider-generation,
+activation, credential, and projection identifiers. The SDK fails closed when an
+IAM-v3 Core deployment omits or returns malformed authority metadata.
 The refresh re-runs the thumbprint check *before* replacing cached metadata, so a
 credential that rotated to a key this process does not hold fails loudly and leaves
 the client on its previous identity. The SDK never refreshes automatically after an

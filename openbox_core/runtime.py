@@ -66,6 +66,7 @@ class OpenBoxRuntime:
             # Non-None only in bootstrap mode, where load_okta_identity() returns
             # None because Core has not supplied the metadata yet.
             okta_bootstrap_private_key=config.okta_bootstrap_private_key(),
+            workload_private_key=config.keycloak_workload_private_key(),
             sdk_version=config.sdk_version,
             sdk_engine=config.sdk_engine,
             sdk_language=config.sdk_language,

@@ -64,6 +64,8 @@ _ENV_FIELDS: dict[str, str] = {
     "agent_name": "AGENT_NAME",
     "agent_did": "AGENT_DID",
     "agent_private_key": "AGENT_PRIVATE_KEY",
+    # Provider-neutral Keycloak service-account key used by Core v3.
+    "workload_private_key": "WORKLOAD_PRIVATE_KEY",
     # v2 (Okta AI Agent) tagged identity — proposal §13.1.
     "identity_method": "AGENT_IDENTITY_METHOD",
     "okta_agent_id": "OKTA_AGENT_ID",
@@ -197,6 +199,7 @@ class OpenBoxConfig:
     agent_name: str | None = None
     agent_did: str | None = None
     agent_private_key: str | None = field(default=None, repr=False)  # never in repr
+    workload_private_key: str | None = field(default=None, repr=False)
     # v2 (Okta AI Agent) tagged identity — proposal §13.1. Mutually exclusive
     # with agent_did/agent_private_key; see `normalized()`.
     identity_method: str | None = None  # explicit override; resolved in-place by normalized()
@@ -408,6 +411,16 @@ class OpenBoxConfig:
         from .identity import AgentIdentity
 
         return AgentIdentity.from_private_key(self.agent_did, self.agent_private_key)
+
+    def keycloak_workload_private_key(self) -> str | None:
+        """Return the RSA key for Keycloak service-account authentication.
+
+        Existing Okta-managed agents already hold the RSA key projected into
+        their Keycloak service account. Keycloak-native and Entra-managed agents
+        configure the provider-neutral ``OPENBOX_WORKLOAD_PRIVATE_KEY``.
+        """
+
+        return self.workload_private_key or self.okta_agent_private_key
 
     def okta_config_mode(self) -> str | None:
         """How this config's Okta metadata arrives, or None when not Okta mode.

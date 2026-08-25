@@ -29,6 +29,7 @@ __all__ = [
     "AUTH_BOOTSTRAP_PATH_V2",
     "SUPPORTED_BOOTSTRAP_VERSION",
     "PRIVATE_KEY_MISMATCH_MESSAGE",
+    "IdentityBootstrapAuthority",
     "IdentityBootstrapDocument",
     "IdentityBootstrapOkta",
     "parse_bootstrap_document",
@@ -56,6 +57,19 @@ PRIVATE_KEY_MISMATCH_MESSAGE = (
 
 
 @dataclass(frozen=True)
+class IdentityBootstrapAuthority:
+    """Provider-neutral, non-secret active-authority metadata from Core."""
+
+    assignment_id: str
+    provider_generation_id: str
+    generation_number: int
+    activation_version: str
+    identity_id: str
+    credential_id: str
+    projection_version: str
+
+
+@dataclass(frozen=True)
 class IdentityBootstrapOkta:
     """The okta_ai_agent half of the bootstrap document."""
 
@@ -75,6 +89,7 @@ class IdentityBootstrapDocument:
     organization_id: str
     deployment_id: str
     assertion_audience: str
+    authority: IdentityBootstrapAuthority
     okta: IdentityBootstrapOkta
 
 
@@ -87,6 +102,40 @@ def _require_string(source: dict, key: str, path: str) -> str:
     return value
 
 
+def _parse_authority(raw: Any) -> IdentityBootstrapAuthority:
+    if not isinstance(raw, dict):
+        raise OpenBoxConfigError(
+            "Identity bootstrap response is invalid: 'authority' must be an object."
+        )
+
+    generation_number = raw.get("generation_number")
+    if (
+        not isinstance(generation_number, int)
+        or isinstance(generation_number, bool)
+        or generation_number < 1
+    ):
+        raise OpenBoxConfigError(
+            "Identity bootstrap response is invalid: "
+            "'authority.generation_number' must be a positive integer."
+        )
+
+    return IdentityBootstrapAuthority(
+        assignment_id=_require_string(raw, "assignment_id", "authority.assignment_id"),
+        provider_generation_id=_require_string(
+            raw, "provider_generation_id", "authority.provider_generation_id"
+        ),
+        generation_number=generation_number,
+        activation_version=_require_string(
+            raw, "activation_version", "authority.activation_version"
+        ),
+        identity_id=_require_string(raw, "identity_id", "authority.identity_id"),
+        credential_id=_require_string(raw, "credential_id", "authority.credential_id"),
+        projection_version=_require_string(
+            raw, "projection_version", "authority.projection_version"
+        ),
+    )
+
+
 def parse_bootstrap_document(raw: Any) -> IdentityBootstrapDocument:
     """Parse and strictly validate a bootstrap response body.
 
@@ -96,9 +145,7 @@ def parse_bootstrap_document(raw: Any) -> IdentityBootstrapDocument:
     explanation.
     """
     if not isinstance(raw, dict):
-        raise OpenBoxConfigError(
-            "Identity bootstrap response is invalid: expected a JSON object."
-        )
+        raise OpenBoxConfigError("Identity bootstrap response is invalid: expected a JSON object.")
 
     version = raw.get("bootstrap_version")
     if version != SUPPORTED_BOOTSTRAP_VERSION:
@@ -125,8 +172,7 @@ def parse_bootstrap_document(raw: Any) -> IdentityBootstrapDocument:
     algorithm = _require_string(okta_raw, "algorithm", "okta.algorithm")
     if algorithm.upper() != "RS256":
         raise OpenBoxConfigError(
-            f"Unsupported Okta credential algorithm {algorithm!r}; only 'RS256' is "
-            "allowlisted."
+            f"Unsupported Okta credential algorithm {algorithm!r}; only 'RS256' is allowlisted."
         )
 
     return IdentityBootstrapDocument(
@@ -136,6 +182,7 @@ def parse_bootstrap_document(raw: Any) -> IdentityBootstrapDocument:
         organization_id=_require_string(raw, "organization_id", "organization_id"),
         deployment_id=_require_string(raw, "deployment_id", "deployment_id"),
         assertion_audience=_require_string(raw, "assertion_audience", "assertion_audience"),
+        authority=_parse_authority(raw.get("authority")),
         okta=IdentityBootstrapOkta(
             external_agent_id=_require_string(
                 okta_raw, "external_agent_id", "okta.external_agent_id"

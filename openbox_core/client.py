@@ -37,8 +37,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlencode
 
 from .contracts.results import ApprovalResult, EvaluationResult
 from .errors import (
@@ -76,6 +77,12 @@ __all__ = [
     "AUTH_VALIDATE_PATH_V2",
     "HANDOFF_PATH_V2",
     "TRANSITION_PROOF_PATH_V2",
+    "EVALUATE_PATH_V3",
+    "APPROVAL_PATH_V3",
+    "AUTH_VALIDATE_PATH_V3",
+    "HANDOFF_PATH_V3",
+    "WORKLOAD_TRANSITION_BOOTSTRAP_PATH_V3",
+    "WORKLOAD_TRANSITION_PROOF_PATH_V3",
     "EvaluationClient",
     "check_expiration",
 ]
@@ -93,6 +100,14 @@ EVALUATE_PATH_V2 = "/api/v2/governance/evaluate"
 APPROVAL_PATH_V2 = "/api/v2/governance/approval"
 AUTH_VALIDATE_PATH_V2 = "/api/v2/auth/validate"
 HANDOFF_PATH_V2 = "/api/v2/handoffs"
+
+# v3 composes the existing API key with a Keycloak service-account token.
+EVALUATE_PATH_V3 = "/api/v3/governance/evaluate"
+APPROVAL_PATH_V3 = "/api/v3/governance/approval"
+AUTH_VALIDATE_PATH_V3 = "/api/v3/auth/validate"
+HANDOFF_PATH_V3 = "/api/v3/handoffs"
+WORKLOAD_TRANSITION_BOOTSTRAP_PATH_V3 = "/api/v3/auth/workload-transition/bootstrap"
+WORKLOAD_TRANSITION_PROOF_PATH_V3 = "/api/v3/auth/workload-transition/proof"
 
 # Re-exported from identity_transitions for callers importing path constants
 # from this module (matches the existing v1/v2 constant convention above).
@@ -116,9 +131,7 @@ def check_expiration(data: dict) -> dict:
         if datetime.now(UTC) > expiration_time:
             data["expired"] = True
     except (ValueError, TypeError) as e:
-        logger.warning(
-            f"Failed to parse approval_expiration_time '{expiration_time_str}': {e}"
-        )
+        logger.warning(f"Failed to parse approval_expiration_time '{expiration_time_str}': {e}")
     return data
 
 
@@ -154,6 +167,7 @@ class EvaluationClient:
         on_api_error: str = "fail_open",
         identity: AgentIdentity | OktaAgentIdentity | None = None,
         okta_bootstrap_private_key: str | None = None,
+        workload_private_key: str | None = None,
         sdk_version: str | None = None,
         sdk_engine: str = DEFAULT_SDK_ENGINE,
         sdk_language: str = DEFAULT_SDK_LANGUAGE,
@@ -161,29 +175,35 @@ class EvaluationClient:
         async_transport: Any = None,
     ):
         """Args:
-            api_url: Core base URL (no trailing slash needed).
-            api_key: Bearer API key.
-            timeout_seconds: Per-request timeout.
-            on_api_error: "fail_open" (default) or "fail_closed".
-            identity: Loaded identity for signed requests — an
-                ``AgentIdentity`` selects v1 OpenBox DID routes, an
-                ``OktaAgentIdentity`` selects v2 Okta AI Agent routes, and
-                ``None`` selects inferred v1 legacy_unsigned (API-key-only).
-            okta_bootstrap_private_key: PKCS8 PEM RSA private key for BOOTSTRAP
-                mode — the client fetches this agent's non-secret identity
-                metadata from ``GET /api/v2/auth/bootstrap`` and builds its
-                ``OktaAgentIdentity`` from the result. Mutually exclusive with
-                ``identity``. Supplying it makes this a v2 client IMMEDIATELY —
-                before the fetch completes — so a bootstrap failure can never be
-                mistaken for "no v2 identity configured" and silently downgrade
-                the request to v1.
-            sdk_version/sdk_engine/sdk_language: Values used to build
-                X-OpenBox-SDK-Version as openbox-{engine}-{language}-v{version}.
-            transport/async_transport: Optional httpx transports (tests inject
-                ``httpx.MockTransport`` here; production leaves them None).
+        api_url: Core base URL (no trailing slash needed).
+        api_key: Bearer API key.
+        timeout_seconds: Per-request timeout.
+        on_api_error: "fail_open" (default) or "fail_closed".
+        identity: Loaded identity for signed requests — an
+            ``AgentIdentity`` selects v1 OpenBox DID routes, an
+            ``OktaAgentIdentity`` selects v2 Okta AI Agent routes, and
+            ``None`` selects inferred v1 legacy_unsigned (API-key-only).
+        okta_bootstrap_private_key: PKCS8 PEM RSA private key for BOOTSTRAP
+            mode — the client fetches this agent's non-secret identity
+            metadata from ``GET /api/v2/auth/bootstrap`` and builds its
+            ``OktaAgentIdentity`` from the result. Mutually exclusive with
+            ``identity``. Supplying it makes this a v2 client IMMEDIATELY —
+            before the fetch completes — so a bootstrap failure can never be
+            mistaken for "no v2 identity configured" and silently downgrade
+            the request to v1.
+        workload_private_key: PKCS8 PEM RSA key for the active Keycloak
+            service account. Explicitly absent v3 authority preserves the
+            current v1/v2 route; advertised authority never downgrades after
+            a bootstrap or token-exchange failure.
+        sdk_version/sdk_engine/sdk_language: Values used to build
+            X-OpenBox-SDK-Version as openbox-{engine}-{language}-v{version}.
+        transport/async_transport: Optional httpx transports (tests inject
+            ``httpx.MockTransport`` here; production leaves them None).
         """
         if on_api_error not in ("fail_open", "fail_closed"):
-            raise ValueError(f"on_api_error must be 'fail_open' or 'fail_closed', got {on_api_error!r}")
+            raise ValueError(
+                f"on_api_error must be 'fail_open' or 'fail_closed', got {on_api_error!r}"
+            )
         if okta_bootstrap_private_key and identity is not None:
             raise OpenBoxConfigError(
                 "EvaluationClient received both okta_bootstrap_private_key and a "
@@ -196,6 +216,7 @@ class EvaluationClient:
         self._on_api_error = on_api_error
         self._identity = identity
         self._okta_bootstrap_private_key = okta_bootstrap_private_key
+        self._workload_private_key = workload_private_key
         # Populated once Core's metadata arrives; replaced by refresh.
         self._bootstrap_document: IdentityBootstrapDocument | None = None
         # Single-flight guards so concurrent first requests perform ONE fetch.
@@ -209,6 +230,11 @@ class EvaluationClient:
         # construction, on the Python versions this package supports).
         self._bootstrap_lock = threading.Lock()
         self._abootstrap_lock = asyncio.Lock()
+        self._workload_lock = threading.Lock()
+        self._aworkload_lock = asyncio.Lock()
+        self._workload_document: Any = None
+        self._workload_token: Any = None
+        self._workload_unavailable_until: datetime | None = None
         self._sdk_version = sdk_version
         self._sdk_engine = sdk_engine
         self._sdk_language = sdk_language
@@ -247,6 +273,211 @@ class EvaluationClient:
         if self._async_client is not None:
             await self._async_client.aclose()
             self._async_client = None
+
+    # ── Keycloak workload bootstrap ─────────────────────────────────────
+
+    def workload_identity_metadata(self) -> Any:
+        """Validated non-secret v3 authority metadata, or ``None``."""
+
+        return self._workload_document
+
+    def _workload_bootstrap_request(self) -> tuple[str, dict[str, str]]:
+        from .workload_identity import AUTH_BOOTSTRAP_PATH_V3
+
+        headers = build_auth_headers(
+            self._api_key,
+            sdk_version=self._sdk_version,
+            sdk_engine=self._sdk_engine,
+            sdk_language=self._sdk_language,
+        )
+        headers["Accept"] = "application/json"
+        return f"{self._api_url}{AUTH_BOOTSTRAP_PATH_V3}", headers
+
+    def _workload_token_request(self, document: Any) -> tuple[str, dict[str, str], bytes]:
+        from .workload_identity import build_private_key_jwt
+
+        private_key = self._workload_private_key
+        if not private_key:
+            raise OpenBoxConfigError("No Keycloak workload private key is configured.")
+        assertion = build_private_key_jwt(private_key, document)
+        body = urlencode(
+            {
+                "grant_type": "client_credentials",
+                "client_id": document.client_id,
+                "client_assertion_type": ("urn:ietf:params:oauth:client-assertion-type:jwt-bearer"),
+                "client_assertion": assertion,
+            }
+        ).encode("ascii")
+        return (
+            document.token_endpoint,
+            {
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body,
+        )
+
+    def _exchange_workload_token(
+        self, token_url: str, token_headers: dict[str, str], token_body: bytes
+    ) -> Any:
+        from .instrumentation.http import suppress_http_instrumentation
+
+        # This SDK-owned authority exchange obtains the proof used to govern
+        # the caller's operation. Governing it recursively would deadlock on
+        # the workload-token lock and cannot produce a meaningful IAM check.
+        with suppress_http_instrumentation():
+            return self._sync().post(token_url, content=token_body, headers=token_headers)
+
+    async def _aexchange_workload_token(
+        self, token_url: str, token_headers: dict[str, str], token_body: bytes
+    ) -> Any:
+        from .instrumentation.http import suppress_http_instrumentation
+
+        with suppress_http_instrumentation():
+            return await self._async().post(token_url, content=token_body, headers=token_headers)
+
+    def _fetch_workload_identity(self) -> str | None:
+        from .identity_okta import load_rsa_pkcs8_private_key
+        from .workload_identity import (
+            parse_workload_bootstrap_response,
+            parse_workload_token_response,
+        )
+
+        private_key = self._workload_private_key
+        if not private_key:
+            return None
+        # Fail locally before publishing or requesting any authority metadata.
+        load_rsa_pkcs8_private_key(private_key)
+        bootstrap_url, bootstrap_headers = self._workload_bootstrap_request()
+        try:
+            response = self._sync().get(bootstrap_url, headers=bootstrap_headers)
+        except Exception as exc:
+            raise OpenBoxNetworkError(
+                f"OpenBox workload identity bootstrap is unavailable ({exc})."
+            ) from exc
+        document = parse_workload_bootstrap_response(response.status_code, response.content)
+        if document is None:
+            self._workload_unavailable_until = datetime.now(UTC) + timedelta(seconds=60)
+            return None
+
+        token_url, token_headers, token_body = self._workload_token_request(document)
+        try:
+            response = self._exchange_workload_token(token_url, token_headers, token_body)
+        except Exception as exc:
+            raise OpenBoxNetworkError(
+                f"Keycloak workload token exchange is unavailable ({exc})."
+            ) from exc
+        token = parse_workload_token_response(response.status_code, response.content)
+        # Publish the authority and token together; callers never observe a v3
+        # authority without a usable token for that exact service account.
+        self._workload_document = document
+        self._workload_token = token
+        self._workload_unavailable_until = None
+        return token.value
+
+    async def _afetch_workload_identity(self) -> str | None:
+        from .identity_okta import load_rsa_pkcs8_private_key
+        from .workload_identity import (
+            parse_workload_bootstrap_response,
+            parse_workload_token_response,
+        )
+
+        private_key = self._workload_private_key
+        if not private_key:
+            return None
+        load_rsa_pkcs8_private_key(private_key)
+        bootstrap_url, bootstrap_headers = self._workload_bootstrap_request()
+        try:
+            response = await self._async().get(bootstrap_url, headers=bootstrap_headers)
+        except Exception as exc:
+            raise OpenBoxNetworkError(
+                f"OpenBox workload identity bootstrap is unavailable ({exc})."
+            ) from exc
+        document = parse_workload_bootstrap_response(response.status_code, response.content)
+        if document is None:
+            self._workload_unavailable_until = datetime.now(UTC) + timedelta(seconds=60)
+            return None
+
+        token_url, token_headers, token_body = self._workload_token_request(document)
+        try:
+            response = await self._aexchange_workload_token(token_url, token_headers, token_body)
+        except Exception as exc:
+            raise OpenBoxNetworkError(
+                f"Keycloak workload token exchange is unavailable ({exc})."
+            ) from exc
+        token = parse_workload_token_response(response.status_code, response.content)
+        self._workload_document = document
+        self._workload_token = token
+        self._workload_unavailable_until = None
+        return token.value
+
+    def _refresh_workload_token(self) -> str:
+        from .workload_identity import parse_workload_token_response
+
+        document = self._workload_document
+        if document is None:
+            raise OpenBoxConfigError("No active workload identity metadata is cached.")
+        token_url, token_headers, token_body = self._workload_token_request(document)
+        try:
+            response = self._exchange_workload_token(token_url, token_headers, token_body)
+        except Exception as exc:
+            raise OpenBoxNetworkError(
+                f"Keycloak workload token exchange is unavailable ({exc})."
+            ) from exc
+        token = parse_workload_token_response(response.status_code, response.content)
+        self._workload_token = token
+        return token.value
+
+    async def _arefresh_workload_token(self) -> str:
+        from .workload_identity import parse_workload_token_response
+
+        document = self._workload_document
+        if document is None:
+            raise OpenBoxConfigError("No active workload identity metadata is cached.")
+        token_url, token_headers, token_body = self._workload_token_request(document)
+        try:
+            response = await self._aexchange_workload_token(token_url, token_headers, token_body)
+        except Exception as exc:
+            raise OpenBoxNetworkError(
+                f"Keycloak workload token exchange is unavailable ({exc})."
+            ) from exc
+        token = parse_workload_token_response(response.status_code, response.content)
+        self._workload_token = token
+        return token.value
+
+    def _ensure_workload_token(self) -> str | None:
+        if not self._workload_private_key:
+            return None
+        token = self._workload_token
+        if token is not None and token.is_fresh():
+            return token.value
+        unavailable_until = self._workload_unavailable_until
+        if unavailable_until is not None and unavailable_until > datetime.now(UTC):
+            return None
+        with self._workload_lock:
+            token = self._workload_token
+            if token is not None and token.is_fresh():
+                return token.value
+            if self._workload_document is not None:
+                return self._refresh_workload_token()
+            return self._fetch_workload_identity()
+
+    async def _aensure_workload_token(self) -> str | None:
+        if not self._workload_private_key:
+            return None
+        token = self._workload_token
+        if token is not None and token.is_fresh():
+            return token.value
+        unavailable_until = self._workload_unavailable_until
+        if unavailable_until is not None and unavailable_until > datetime.now(UTC):
+            return None
+        async with self._aworkload_lock:
+            token = self._workload_token
+            if token is not None and token.is_fresh():
+                return token.value
+            if self._workload_document is not None:
+                return await self._arefresh_workload_token()
+            return await self._afetch_workload_identity()
 
     # ── Identity bootstrap ────────────────────────────────────────────────
 
@@ -452,7 +683,13 @@ class EvaluationClient:
     # ── Request preparation ───────────────────────────────────────────────
 
     def _prepared(
-        self, method: str, v1_path: str, v2_path: str, payload: dict | None
+        self,
+        method: str,
+        v1_path: str,
+        v2_path: str,
+        payload: dict | None,
+        *,
+        v3_path: str | None = None,
     ) -> tuple[str, dict, bytes]:
         """Build ``(url, headers, body)`` for the version selected by identity type.
 
@@ -460,18 +697,49 @@ class EvaluationClient:
         needs it — the one thing standing between an unresolved v2 client and a
         request. It raises rather than proceeding unsigned.
         """
-        self._ensure_okta_identity()
-        return self._build_prepared(method, v1_path, v2_path, payload)
+        workload_token = self._ensure_workload_token()
+        if workload_token is None:
+            self._ensure_okta_identity()
+        return self._build_prepared(
+            method,
+            v1_path,
+            v2_path,
+            payload,
+            v3_path=v3_path,
+            workload_token=workload_token,
+        )
 
     async def _aprepared(
-        self, method: str, v1_path: str, v2_path: str, payload: dict | None
+        self,
+        method: str,
+        v1_path: str,
+        v2_path: str,
+        payload: dict | None,
+        *,
+        v3_path: str | None = None,
     ) -> tuple[str, dict, bytes]:
         """Async twin of :meth:`_prepared`."""
-        await self._aensure_okta_identity()
-        return self._build_prepared(method, v1_path, v2_path, payload)
+        workload_token = await self._aensure_workload_token()
+        if workload_token is None:
+            await self._aensure_okta_identity()
+        return self._build_prepared(
+            method,
+            v1_path,
+            v2_path,
+            payload,
+            v3_path=v3_path,
+            workload_token=workload_token,
+        )
 
     def _build_prepared(
-        self, method: str, v1_path: str, v2_path: str, payload: dict | None
+        self,
+        method: str,
+        v1_path: str,
+        v2_path: str,
+        payload: dict | None,
+        *,
+        v3_path: str | None = None,
+        workload_token: str | None = None,
     ) -> tuple[str, dict, bytes]:
         """Sign and build the request. Performs no I/O.
 
@@ -481,6 +749,21 @@ class EvaluationClient:
         so there is no code path that can retry a v2 call against v1 or vice
         versa (proposal §13.3).
         """
+        if workload_token is not None:
+            if v3_path is None:
+                raise OpenBoxConfigError("This operation does not support workload authentication.")
+            from .serialization import serialize_body
+            from .workload_identity import WORKLOAD_TOKEN_HEADER
+
+            headers = build_auth_headers(
+                self._api_key,
+                sdk_version=self._sdk_version,
+                sdk_engine=self._sdk_engine,
+                sdk_language=self._sdk_language,
+            )
+            headers[WORKLOAD_TOKEN_HEADER] = workload_token
+            return f"{self._api_url}{v3_path}", headers, serialize_body(payload)
+
         if isinstance(self._identity, OktaAgentIdentity):
             headers, body = prepare_okta_signed_request(
                 method,
@@ -532,7 +815,9 @@ class EvaluationClient:
         an authentication failure is never a network error). Other NETWORK
         errors never raise under fail_open — they return a
         ``fallback_used=True`` ALLOW."""
-        url, headers, body = self._prepared("POST", EVALUATE_PATH, EVALUATE_PATH_V2, payload)
+        url, headers, body = self._prepared(
+            "POST", EVALUATE_PATH, EVALUATE_PATH_V2, payload, v3_path=EVALUATE_PATH_V3
+        )
         try:
             response = self._sync().post(url, content=body, headers=headers)
         except Exception as e:  # network layer
@@ -541,7 +826,9 @@ class EvaluationClient:
 
     async def aevaluate(self, payload: dict) -> EvaluationResult:
         """Async :meth:`evaluate`."""
-        url, headers, body = await self._aprepared("POST", EVALUATE_PATH, EVALUATE_PATH_V2, payload)
+        url, headers, body = await self._aprepared(
+            "POST", EVALUATE_PATH, EVALUATE_PATH_V2, payload, v3_path=EVALUATE_PATH_V3
+        )
         try:
             response = await self._async().post(url, content=body, headers=headers)
         except Exception as e:
@@ -550,7 +837,10 @@ class EvaluationClient:
 
     def _parse_evaluate_response(self, response: Any) -> EvaluationResult:
         if response.status_code in (401, 403):
-            raise self._classify_auth_failure(response, signed=self._identity is not None)
+            raise self._classify_auth_failure(
+                response,
+                signed=self._identity is not None or self._workload_document is not None,
+            )
         if response.status_code >= 400:
             return self._network_failure(f"Governance API error: HTTP {response.status_code}")
         try:
@@ -571,7 +861,9 @@ class EvaluationClient:
 
     # ── Approval polling ──────────────────────────────────────────────────
 
-    def poll_approval(self, workflow_id: str, run_id: str, activity_id: str) -> ApprovalResult | None:
+    def poll_approval(
+        self, workflow_id: str, run_id: str, activity_id: str
+    ) -> ApprovalResult | None:
         """Poll HITL approval status once.
 
         401/403 always raise (fails closed — an authentication failure must
@@ -579,7 +871,9 @@ class EvaluationClient:
         failure or non-200 still returns ``None`` (callers treat that as
         still-pending and retry)."""
         payload = {"workflow_id": workflow_id, "run_id": run_id, "activity_id": activity_id}
-        url, headers, body = self._prepared("POST", APPROVAL_PATH, APPROVAL_PATH_V2, payload)
+        url, headers, body = self._prepared(
+            "POST", APPROVAL_PATH, APPROVAL_PATH_V2, payload, v3_path=APPROVAL_PATH_V3
+        )
         try:
             response = self._sync().post(url, content=body, headers=headers)
         except Exception as e:
@@ -592,7 +886,9 @@ class EvaluationClient:
     ) -> ApprovalResult | None:
         """Async :meth:`poll_approval`."""
         payload = {"workflow_id": workflow_id, "run_id": run_id, "activity_id": activity_id}
-        url, headers, body = await self._aprepared("POST", APPROVAL_PATH, APPROVAL_PATH_V2, payload)
+        url, headers, body = await self._aprepared(
+            "POST", APPROVAL_PATH, APPROVAL_PATH_V2, payload, v3_path=APPROVAL_PATH_V3
+        )
         try:
             response = await self._async().post(url, content=body, headers=headers)
         except Exception as e:
@@ -602,7 +898,10 @@ class EvaluationClient:
 
     def _parse_approval_response(self, response: Any) -> ApprovalResult | None:
         if response.status_code in (401, 403):
-            raise self._classify_auth_failure(response, signed=self._identity is not None)
+            raise self._classify_auth_failure(
+                response,
+                signed=self._identity is not None or self._workload_document is not None,
+            )
         if response.status_code != 200:
             logger.warning(f"Failed to get approval status: HTTP {response.status_code}")
             return None
@@ -623,7 +922,9 @@ class EvaluationClient:
         Returns True on success. Raises OpenBoxAuthError / OpenBoxSigningError
         on 401/403, OpenBoxNetworkError on connectivity failure.
         """
-        url, headers, _ = self._prepared("GET", AUTH_VALIDATE_PATH, AUTH_VALIDATE_PATH_V2, None)
+        url, headers, _ = self._prepared(
+            "GET", AUTH_VALIDATE_PATH, AUTH_VALIDATE_PATH_V2, None, v3_path=AUTH_VALIDATE_PATH_V3
+        )
         try:
             response = self._sync().get(url, headers=headers)
         except Exception as e:
@@ -632,7 +933,9 @@ class EvaluationClient:
 
     async def avalidate_api_key(self) -> bool:
         """Async :meth:`validate_api_key`."""
-        url, headers, _ = await self._aprepared("GET", AUTH_VALIDATE_PATH, AUTH_VALIDATE_PATH_V2, None)
+        url, headers, _ = await self._aprepared(
+            "GET", AUTH_VALIDATE_PATH, AUTH_VALIDATE_PATH_V2, None, v3_path=AUTH_VALIDATE_PATH_V3
+        )
         try:
             response = await self._async().get(url, headers=headers)
         except Exception as e:
@@ -643,7 +946,10 @@ class EvaluationClient:
         if response.status_code == 200:
             return True
         if response.status_code in (401, 403):
-            raise self._classify_auth_failure(response, signed=self._identity is not None)
+            raise self._classify_auth_failure(
+                response,
+                signed=self._identity is not None or self._workload_document is not None,
+            )
         raise OpenBoxNetworkError(
             f"Cannot reach OpenBox Core at {self._api_url}: HTTP {response.status_code}"
         )
@@ -664,17 +970,23 @@ class EvaluationClient:
         handoff event; un-upgraded callers keep using that event directly.
         """
         payload = self._handoff_payload(target_agent_id, reason)
-        url, headers, body = self._prepared("POST", HANDOFF_PATH, HANDOFF_PATH_V2, payload)
+        url, headers, body = self._prepared(
+            "POST", HANDOFF_PATH, HANDOFF_PATH_V2, payload, v3_path=HANDOFF_PATH_V3
+        )
         try:
             response = self._sync().post(url, content=body, headers=headers)
         except Exception as e:
             raise OpenBoxNetworkError(f"Cannot reach OpenBox Core at {self._api_url}: {e}") from e
         return self._parse_handoff_response(response)
 
-    async def aemit_handoff(self, target_agent_id: str, reason: str | None = None) -> dict[str, Any]:
+    async def aemit_handoff(
+        self, target_agent_id: str, reason: str | None = None
+    ) -> dict[str, Any]:
         """Async :meth:`emit_handoff`."""
         payload = self._handoff_payload(target_agent_id, reason)
-        url, headers, body = await self._aprepared("POST", HANDOFF_PATH, HANDOFF_PATH_V2, payload)
+        url, headers, body = await self._aprepared(
+            "POST", HANDOFF_PATH, HANDOFF_PATH_V2, payload, v3_path=HANDOFF_PATH_V3
+        )
         try:
             response = await self._async().post(url, content=body, headers=headers)
         except Exception as e:
@@ -689,7 +1001,7 @@ class EvaluationClient:
         # handoff — and would tell the operator to provision an identity they
         # already have. Worse, this guard runs BEFORE _prepared(), so the
         # bootstrap that would have populated _identity never even starts.
-        if self._identity is None and not self._is_v2:
+        if self._identity is None and not self._is_v2 and not self._workload_private_key:
             raise OpenBoxConfigError(
                 "Cannot emit a source-authenticated handoff without a configured "
                 "identity (openbox_did or okta_ai_agent) — inferred unsigned mode "
@@ -704,7 +1016,10 @@ class EvaluationClient:
 
     def _parse_handoff_response(self, response: Any) -> dict[str, Any]:
         if response.status_code in (401, 403):
-            raise self._classify_auth_failure(response, signed=self._identity is not None)
+            raise self._classify_auth_failure(
+                response,
+                signed=self._identity is not None or self._workload_document is not None,
+            )
         if response.status_code >= 400:
             raise GovernanceAPIError(f"Handoff request failed: HTTP {response.status_code}")
         try:
@@ -796,6 +1111,125 @@ class EvaluationClient:
         )
         return await self._asend_transition_proof(path, headers, body)
 
+    def prove_workload_identity_transition(
+        self,
+        transition_id: str,
+        *,
+        candidate_private_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Prove a prepared Keycloak service-account candidate.
+
+        This operation uses the stable agent API key plus a one-minute
+        private-key assertion. It does not activate the candidate and never
+        stores the candidate key in client state.
+        """
+        from .serialization import serialize_body
+        from .workload_identity import (
+            build_private_key_jwt,
+            parse_workload_transition_bootstrap_response,
+        )
+
+        private_key = candidate_private_key or self._workload_private_key
+        if not private_key:
+            raise OpenBoxConfigError(
+                "prove_workload_identity_transition() requires the candidate private key."
+            )
+        headers = build_auth_headers(
+            self._api_key,
+            sdk_version=self._sdk_version,
+            sdk_engine=self._sdk_engine,
+            sdk_language=self._sdk_language,
+        )
+        try:
+            bootstrap = self._sync().get(
+                f"{self._api_url}{WORKLOAD_TRANSITION_BOOTSTRAP_PATH_V3}",
+                params={"transition_id": transition_id},
+                headers=headers,
+            )
+        except Exception as exc:
+            raise OpenBoxNetworkError(
+                f"Cannot reach OpenBox Core at {self._api_url}: {exc}"
+            ) from exc
+        document = parse_workload_transition_bootstrap_response(
+            bootstrap.status_code, bootstrap.content
+        )
+        if document.transition_id != transition_id.lower():
+            raise OpenBoxConfigError(
+                "Workload transition bootstrap did not match the requested transition."
+            )
+        assertion = build_private_key_jwt(private_key, document)
+        body = serialize_body(
+            {"transition_id": document.transition_id, "client_assertion": assertion}
+        )
+        try:
+            response = self._sync().post(
+                f"{self._api_url}{WORKLOAD_TRANSITION_PROOF_PATH_V3}",
+                content=body,
+                headers=headers,
+            )
+        except Exception as exc:
+            raise OpenBoxNetworkError(
+                f"Cannot reach OpenBox Core at {self._api_url}: {exc}"
+            ) from exc
+        return self._parse_transition_proof_response(response)
+
+    async def aprove_workload_identity_transition(
+        self,
+        transition_id: str,
+        *,
+        candidate_private_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Async :meth:`prove_workload_identity_transition`."""
+        from .serialization import serialize_body
+        from .workload_identity import (
+            build_private_key_jwt,
+            parse_workload_transition_bootstrap_response,
+        )
+
+        private_key = candidate_private_key or self._workload_private_key
+        if not private_key:
+            raise OpenBoxConfigError(
+                "aprove_workload_identity_transition() requires the candidate private key."
+            )
+        headers = build_auth_headers(
+            self._api_key,
+            sdk_version=self._sdk_version,
+            sdk_engine=self._sdk_engine,
+            sdk_language=self._sdk_language,
+        )
+        try:
+            bootstrap = await self._async().get(
+                f"{self._api_url}{WORKLOAD_TRANSITION_BOOTSTRAP_PATH_V3}",
+                params={"transition_id": transition_id},
+                headers=headers,
+            )
+        except Exception as exc:
+            raise OpenBoxNetworkError(
+                f"Cannot reach OpenBox Core at {self._api_url}: {exc}"
+            ) from exc
+        document = parse_workload_transition_bootstrap_response(
+            bootstrap.status_code, bootstrap.content
+        )
+        if document.transition_id != transition_id.lower():
+            raise OpenBoxConfigError(
+                "Workload transition bootstrap did not match the requested transition."
+            )
+        assertion = build_private_key_jwt(private_key, document)
+        body = serialize_body(
+            {"transition_id": document.transition_id, "client_assertion": assertion}
+        )
+        try:
+            response = await self._async().post(
+                f"{self._api_url}{WORKLOAD_TRANSITION_PROOF_PATH_V3}",
+                content=body,
+                headers=headers,
+            )
+        except Exception as exc:
+            raise OpenBoxNetworkError(
+                f"Cannot reach OpenBox Core at {self._api_url}: {exc}"
+            ) from exc
+        return self._parse_transition_proof_response(response)
+
     def _send_transition_proof(self, path: str, headers: dict, body: bytes) -> dict[str, Any]:
         url = f"{self._api_url}{path}"
         try:
@@ -804,7 +1238,9 @@ class EvaluationClient:
             raise OpenBoxNetworkError(f"Cannot reach OpenBox Core at {self._api_url}: {e}") from e
         return self._parse_transition_proof_response(response)
 
-    async def _asend_transition_proof(self, path: str, headers: dict, body: bytes) -> dict[str, Any]:
+    async def _asend_transition_proof(
+        self, path: str, headers: dict, body: bytes
+    ) -> dict[str, Any]:
         url = f"{self._api_url}{path}"
         try:
             response = await self._async().post(url, content=body, headers=headers)

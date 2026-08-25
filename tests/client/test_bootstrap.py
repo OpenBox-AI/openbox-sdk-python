@@ -38,6 +38,11 @@ DEPLOYMENT_ID = "fixture-deployment"
 AUDIENCE = "urn:openbox:fixture-deployment:core"
 EXTERNAL_AGENT_ID = "fixture-okta-ai-agent-0001"
 CREDENTIAL_KID = "fixture-okta-credential-kid-0001"
+ASSIGNMENT_ID = "00000000-0000-4000-8000-000000000003"
+GENERATION_ID = "00000000-0000-4000-8000-000000000004"
+ACTIVATION_VERSION = "00000000-0000-4000-8000-000000000005"
+IDENTITY_ID = "00000000-0000-4000-8000-000000000006"
+CREDENTIAL_ID = "00000000-0000-4000-8000-000000000007"
 
 
 def _b64url_to_int(segment: str) -> int:
@@ -53,9 +58,7 @@ def _pem_from_jwk(jwk: dict) -> str:
         dmp1=_b64url_to_int(jwk["dp"]),
         dmq1=_b64url_to_int(jwk["dq"]),
         iqmp=_b64url_to_int(jwk["qi"]),
-        public_numbers=rsa.RSAPublicNumbers(
-            e=_b64url_to_int(jwk["e"]), n=_b64url_to_int(jwk["n"])
-        ),
+        public_numbers=rsa.RSAPublicNumbers(e=_b64url_to_int(jwk["e"]), n=_b64url_to_int(jwk["n"])),
     )
     return (
         numbers.private_key()
@@ -81,6 +84,15 @@ def bootstrap_body(**overrides) -> dict:
         "organization_id": ORG_ID,
         "deployment_id": DEPLOYMENT_ID,
         "assertion_audience": AUDIENCE,
+        "authority": {
+            "assignment_id": ASSIGNMENT_ID,
+            "provider_generation_id": GENERATION_ID,
+            "generation_number": 2,
+            "activation_version": ACTIVATION_VERSION,
+            "identity_id": IDENTITY_ID,
+            "credential_id": CREDENTIAL_ID,
+            "projection_version": "credential-sync-v4",
+        },
         "okta": {
             "external_agent_id": EXTERNAL_AGENT_ID,
             "credential_kid": CREDENTIAL_KID,
@@ -208,8 +220,15 @@ class TestBootstrapSuccessPath:
         client.validate_api_key()
 
         metadata = client.identity_metadata()
+        assert metadata is not None
         assert metadata.openbox_agent_id == AGENT_ID
         assert metadata.okta.credential_kid == CREDENTIAL_KID
+        assert metadata.authority is not None
+        assert metadata.authority.provider_generation_id == GENERATION_ID
+        assert metadata.authority.generation_number == 2
+        assert metadata.authority.activation_version == ACTIVATION_VERSION
+        assert metadata.authority.credential_id == CREDENTIAL_ID
+        assert metadata.authority.projection_version == "credential-sync-v4"
         # Non-secret only — no key material is retained.
         assert "PRIVATE KEY" not in repr(metadata)
 
@@ -367,6 +386,32 @@ class TestFailureHandling:
             make_client(core).validate_api_key()
 
     @pytest.mark.parametrize(
+        ("authority", "message"),
+        [
+            ("not-an-object", "'authority' must be an object"),
+            ({"generation_number": 1}, "authority.assignment_id"),
+            (
+                {
+                    **bootstrap_body()["authority"],
+                    "generation_number": 0,
+                },
+                "authority.generation_number",
+            ),
+        ],
+    )
+    def test_rejects_malformed_authority_metadata(self, authority, message):
+        core = FakeCore([ok(bootstrap_body(authority=authority))])
+        with pytest.raises(OpenBoxConfigError, match=message):
+            make_client(core).validate_api_key()
+
+    def test_rejects_bootstrap_without_authority_metadata(self):
+        body = bootstrap_body()
+        del body["authority"]
+        core = FakeCore([ok(body)])
+        with pytest.raises(OpenBoxConfigError, match="'authority' must be an object"):
+            make_client(core).validate_api_key()
+
+    @pytest.mark.parametrize(
         "field",
         ["openbox_agent_id", "organization_id", "deployment_id", "assertion_audience"],
     )
@@ -408,14 +453,21 @@ class TestRefreshIdentityMetadata:
     def test_replaces_metadata_after_reverifying_thumbprint(self):
         rotated = bootstrap_body()
         rotated["okta"]["credential_kid"] = "rotated-credential-kid-0002"
+        rotated["authority"]["activation_version"] = "00000000-0000-4000-8000-000000000008"
+        rotated["authority"]["projection_version"] = "credential-sync-v5"
         core = FakeCore([ok(bootstrap_body()), ok(rotated)])
         client = make_client(core)
 
         client.validate_api_key()
-        assert client.identity_metadata().okta.credential_kid == CREDENTIAL_KID
+        metadata = client.identity_metadata()
+        assert metadata is not None
+        assert metadata.okta.credential_kid == CREDENTIAL_KID
 
         refreshed = client.refresh_identity_metadata()
         assert refreshed.okta.credential_kid == "rotated-credential-kid-0002"
+        assert refreshed.authority is not None
+        assert refreshed.authority.activation_version.endswith("0008")
+        assert refreshed.authority.projection_version == "credential-sync-v5"
 
         # Subsequent requests sign with the refreshed kid.
         client.validate_api_key()
@@ -438,7 +490,9 @@ class TestRefreshIdentityMetadata:
             client.refresh_identity_metadata()
 
         # Cached metadata is unchanged — not replaced by the unusable document.
-        assert client.identity_metadata().okta.credential_kid == CREDENTIAL_KID
+        metadata = client.identity_metadata()
+        assert metadata is not None
+        assert metadata.okta.credential_kid == CREDENTIAL_KID
 
     def test_rejected_for_client_not_in_bootstrap_mode(self):
         transport = httpx.MockTransport(FakeCore([]).handler)
@@ -601,9 +655,9 @@ class TestSingleFlight:
             barrier.wait()
             document = client.refresh_identity_metadata()
             # Read both without holding the lock: they must still agree.
-            observed.append(
-                (document.okta.credential_kid, client.identity_metadata().okta.credential_kid)
-            )
+            metadata = client.identity_metadata()
+            assert metadata is not None
+            observed.append((document.okta.credential_kid, metadata.okta.credential_kid))
 
         threads = [threading.Thread(target=refresh) for _ in range(2)]
         for t in threads:
