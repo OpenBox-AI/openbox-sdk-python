@@ -35,8 +35,11 @@ _REQUIRED_HANDOFF_FIELDS = ("from_agent_did", "multi_agent_session_id")
 _SANDBOX_HOOK_TYPE = "sandbox_execution"
 _SANDBOX_SAFE_ATTRIBUTES = frozenset(
     {
+        "openbox.sandbox.provider",
+        # Backward compatibility for spans emitted before the provider key was namespaced.
         "sandbox.provider",
         "openbox.sandbox.profile_id",
+        "openbox.sandbox.dispatch_id",
         "openbox.sandbox.compatibility_id",
         "openbox.sandbox.template_sha256",
         "openbox.sandbox.runtime_contract_version",
@@ -58,6 +61,9 @@ _SANDBOX_SAFE_ATTRIBUTES = frozenset(
         "openbox.sandbox.stderr_bytes",
         "openbox.sandbox.stdout_sha256",
         "openbox.sandbox.stderr_sha256",
+        "openbox.sandbox.egress.count",
+        "openbox.sandbox.violations.count",
+        "openbox.sandbox.violations.categories",
     }
 )
 _SANDBOX_SAFE_ROOT_FIELDS = frozenset(
@@ -82,6 +88,12 @@ _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _IMAGE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _SPAN_ID = re.compile(r"[0-9a-f]{16}\Z")
 _TRACE_ID = re.compile(r"[0-9a-f]{32}\Z")
+_DISPATCH_ID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z"
+)
+_SANDBOX_EGRESS_ATTRIBUTE = re.compile(
+    r"openbox\.sandbox\.egress\.(?:0|[1-9][0-9]{0,2})\.(?:decision|host|port)\Z"
+)
 
 
 def span_stage(span: Any) -> str | None:
@@ -162,12 +174,51 @@ def _check_sandbox_span(span: dict[str, Any], index: int) -> None:
             code="SANDBOX_SPAN_UNSAFE_FIELDS",
             detail={"index": index, "unknown_root": unknown_root},
         )
-    unknown_attributes = sorted(set(attributes) - _SANDBOX_SAFE_ATTRIBUTES)
+    unknown_attributes = sorted(
+        key
+        for key in set(attributes) - _SANDBOX_SAFE_ATTRIBUTES
+        if _SANDBOX_EGRESS_ATTRIBUTE.fullmatch(key) is None
+    )
     if unknown_attributes:
         raise ContractError(
             "Sandbox execution attributes are not privacy allowlisted",
             code="SANDBOX_SPAN_UNSAFE_FIELDS",
             detail={"index": index, "unknown_attributes": unknown_attributes},
+        )
+    egress_count = attributes.get("openbox.sandbox.egress.count", 0)
+    egress_keys = [
+        key for key in attributes if _SANDBOX_EGRESS_ATTRIBUTE.fullmatch(key) is not None
+    ]
+    if (
+        isinstance(egress_count, bool)
+        or not isinstance(egress_count, int)
+        or not 0 <= egress_count <= 128
+        or any(int(key.split(".")[3]) >= egress_count for key in egress_keys)
+        or any(
+            attributes[key] not in {"allowed", "denied"}
+            for key in egress_keys
+            if key.endswith(".decision")
+        )
+        or any(
+            isinstance(attributes[key], bool)
+            or not isinstance(attributes[key], int)
+            or not 0 <= attributes[key] <= 65535
+            for key in egress_keys
+            if key.endswith(".port")
+        )
+        or (
+            "openbox.sandbox.dispatch_id" in attributes
+            and (
+                not isinstance(attributes["openbox.sandbox.dispatch_id"], str)
+                or _DISPATCH_ID.fullmatch(attributes["openbox.sandbox.dispatch_id"])
+                is None
+            )
+        )
+    ):
+        raise ContractError(
+            "Sandbox execution isolation evidence is malformed or unbounded",
+            code="SANDBOX_SPAN_UNSAFE_FIELDS",
+            detail={"index": index},
         )
     status = span.get("status")
     parent_span_id = span.get("parent_span_id")

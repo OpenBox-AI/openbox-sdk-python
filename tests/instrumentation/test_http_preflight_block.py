@@ -7,6 +7,7 @@ from conftest import FakeCore, RaisingHookAdapter
 from instrumented_env import CountingHTTPServer, bound_activity, installed_runtime
 
 from openbox_core.context import ContextStore
+from openbox_core.contracts.results import Verdict
 from openbox_core.errors import GovernanceBlockedError, GovernanceHaltError
 
 
@@ -15,6 +16,15 @@ def server():
     server = CountingHTTPServer()
     yield server
     server.stop()
+
+
+class _ConstrainDispatchAdapter(RaisingHookAdapter):
+    def __init__(self):
+        super().__init__()
+        self.dispatched = []
+
+    def handle_constrain_sync(self, result, context=None):
+        self.dispatched.append((result, context))
 
 
 class TestRequestsLibrary:
@@ -93,6 +103,34 @@ class TestHttpxLibrary:
                 response = await client.get(server.url)
             assert response.status_code == 200
         assert len(fake_core.completed_payloads) == 1
+
+    def test_sync_constrain_dispatches_once_without_sending_request(self):
+        attempts = []
+
+        def transport(request):
+            attempts.append(request)
+            return httpx.Response(200)
+
+        fake_core = FakeCore(
+            {
+                "verdict": "constrain",
+                "reason": "execute replacement profile",
+                "age_result": {"profile_id": "post-batch"},
+            }
+        )
+        adapter, store = _ConstrainDispatchAdapter(), ContextStore()
+        client = httpx.Client(transport=httpx.MockTransport(transport))
+        try:
+            with installed_runtime(fake_core, adapter, store), bound_activity(store):
+                with pytest.raises(GovernanceBlockedError) as exc_info:
+                    client.get("https://host-action.test/intercepted")
+        finally:
+            client.close()
+
+        assert exc_info.value.verdict is Verdict.CONSTRAIN
+        assert attempts == []
+        assert len(adapter.dispatched) == 1
+        assert adapter.dispatched[0][0].raw["age_result"]["profile_id"] == "post-batch"
 
     async def test_prebuilt_async_client_emits_started_and_completed(self):
         async def handler(request):

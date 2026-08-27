@@ -137,7 +137,7 @@ def test_started_stage_emits_explicit_nulls(hook_type):
 
 class TestSandboxExecutionPrivacy:
     SAFE_ATTRIBUTES = {
-        "sandbox.provider": "openshell",
+        "openbox.sandbox.provider": "openshell",
         "openbox.sandbox.profile_id": "accounts-payable",
         "openbox.sandbox.compatibility_id": "openbox-direct-hook-v1",
         "openbox.sandbox.template_sha256": "d" * 64,
@@ -175,6 +175,13 @@ class TestSandboxExecutionPrivacy:
         assert "request_body" not in span
         assert "response_body" not in span
 
+    def test_legacy_provider_key_remains_allowlisted(self):
+        attributes = dict(self.SAFE_ATTRIBUTES)
+        provider = attributes.pop("openbox.sandbox.provider")
+        attributes["sandbox.provider"] = provider
+
+        check_hook_envelope(self._event(attributes=attributes))
+
     @pytest.mark.parametrize(
         ("attributes", "fields"),
         [
@@ -183,12 +190,12 @@ class TestSandboxExecutionPrivacy:
             ({"openbox.sandbox.template_sha256": "not-a-hash"}, None),
             ({"openbox.sandbox.template_sha256": "D" * 64}, None),
             ({"openbox.sandbox.compatibility_id": "x" * 513}, None),
-            ({"sandbox.provider": ["openshell"]}, None),
-            ({"sandbox.provider": "openshell"}, {"request_body": "secret"}),
-            ({"sandbox.provider": "openshell"}, {"error": "raw stderr"}),
-            ({"sandbox.provider": "openshell"}, {"events": [{"name": "raw"}]}),
+            ({"openbox.sandbox.provider": ["openshell"]}, None),
+            ({"openbox.sandbox.provider": "openshell"}, {"request_body": "secret"}),
+            ({"openbox.sandbox.provider": "openshell"}, {"error": "raw stderr"}),
+            ({"openbox.sandbox.provider": "openshell"}, {"events": [{"name": "raw"}]}),
             (
-                {"sandbox.provider": "openshell"},
+                {"openbox.sandbox.provider": "openshell"},
                 {"status": {"code": "ERROR", "description": "raw stderr"}},
             ),
         ],

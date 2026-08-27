@@ -35,6 +35,12 @@ class RecordingAdapter:
     async def handle_approval(self, result):
         self.approvals.append(result)
 
+    async def handle_constrain(self, result, context=None):
+        return None
+
+    def handle_constrain_sync(self, result, context=None):
+        return None
+
     def raise_lifecycle_blocked(self, result):
         self.lifecycle_blocked.append(result)
         raise GovernanceBlockedError(result.verdict, result.reason or "blocked")

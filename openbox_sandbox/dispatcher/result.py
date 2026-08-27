@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from openbox_sandbox.runtime_client.types import EgressDecisionEvidence
+
 from .errors import NormalizedDispatchError
 
 
@@ -50,6 +52,9 @@ class ExecutionMetadata:
     stderr: bytes
     timeout_status: TimeoutStatus
     cleanup_status: CleanupStatus
+    egress_decisions: tuple[EgressDecisionEvidence, ...] = ()
+    violation_count: int | None = None
+    violation_categories: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.stdout, bytes) or not isinstance(self.stderr, bytes):
@@ -61,7 +66,9 @@ class ExecutionMetadata:
             f"sandbox_id={self.sandbox_id!r}, exit_code={self.exit_code!r}, "
             f"stdout_bytes={len(self.stdout)}, stderr_bytes={len(self.stderr)}, "
             f"timeout_status={self.timeout_status.value!r}, "
-            f"cleanup_status={self.cleanup_status.value!r}, output=<redacted>)"
+            f"cleanup_status={self.cleanup_status.value!r}, "
+            f"egress_decisions={len(self.egress_decisions)}, "
+            f"violation_count={self.violation_count!r}, output=<redacted>)"
         )
 
     def to_wire(self) -> dict[str, Any]:

@@ -58,6 +58,26 @@ class FrameworkAdapter(Protocol):
         """
         ...
 
+    async def handle_constrain(
+        self, result: EvaluationResult, context: ActivityContext | None = None
+    ) -> None:
+        """Apply a started-hook CONSTRAIN effect on an async hook path.
+
+        The default callback is a no-op, but the hook runtime still aborts the
+        intercepted host action after this callback returns.
+        """
+        return None
+
+    def handle_constrain_sync(
+        self, result: EvaluationResult, context: ActivityContext | None = None
+    ) -> None:
+        """Apply a started-hook CONSTRAIN effect on a sync hook path.
+
+        The default callback is a no-op, but the hook runtime still aborts the
+        intercepted host action after this callback returns.
+        """
+        return None
+
     def raise_lifecycle_blocked(self, result: EvaluationResult) -> NoReturn:
         """Produce the framework-native effect for a BLOCK/HALT lifecycle verdict."""
         ...
@@ -109,6 +129,16 @@ class CoreAdapter:
         if approval.expired:
             raise ApprovalExpiredError(approval.reason or "Approval window expired")
         raise ApprovalRejectedError(approval.reason or "Approval rejected")
+
+    async def handle_constrain(
+        self, result: EvaluationResult, context: ActivityContext | None = None
+    ) -> None:
+        return None
+
+    def handle_constrain_sync(
+        self, result: EvaluationResult, context: ActivityContext | None = None
+    ) -> None:
+        return None
 
     def raise_lifecycle_blocked(self, result: EvaluationResult) -> NoReturn:
         self._raise_stop(result)

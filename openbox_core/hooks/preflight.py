@@ -6,6 +6,7 @@ effect to the FrameworkAdapter:
 
 - started BLOCK/HALT  -> mark abort (+halt flag) -> ``adapter.raise_hook_blocked``
 - started REQUIRE_APPROVAL -> approval flow; rejected/unavailable -> blocked
+- started CONSTRAIN -> mark abort -> adapter constraint callback -> action-level stop
 - completed verdicts  -> ``adapter.on_completed_hook_result`` + abort/halt
   flags for FUTURE execution (the operation already ran; never undone)
 - prior abort         -> fail fast without another network call
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any, NoReturn
 
 from ..adapters.base import adapter_accepts_context
@@ -25,6 +27,7 @@ from ..contracts.otel_spans import HookType, Stage
 from ..contracts.results import EvaluationResult, Verdict
 from ..errors import ContractError, GovernanceAPIError, GovernanceBlockedError
 from ..hooks.events import build_hook_event, resolve_context
+from ..otel.trace_context import format_span_id
 from ..runtime import OpenBoxRuntime
 
 logger = logging.getLogger(__name__)
@@ -47,6 +50,10 @@ class HookRuntime:
             self._adapter.on_completed_hook_result
         )
         self._approval_accepts_context = adapter_accepts_context(self._adapter.handle_approval)
+        self._async_constrain = getattr(self._adapter, "handle_constrain", None)
+        self._sync_constrain = getattr(self._adapter, "handle_constrain_sync", None)
+        self._async_constrain_accepts_context = adapter_accepts_context(self._async_constrain)
+        self._sync_constrain_accepts_context = adapter_accepts_context(self._sync_constrain)
         hitl = runtime.config.hitl
         self._sync_poller: ApprovalPoller | None = None
         if hitl.enabled:
@@ -153,6 +160,24 @@ class HookRuntime:
             )
         if verdict.requires_approval():
             return self._sync_approval(result, span)
+        if verdict is Verdict.CONSTRAIN:
+            # CONSTRAIN intercepts the operation: reserve the activity abort
+            # before dispatching the replacement profile, then use the exact
+            # action-level stop seam used by BLOCK. The adapter callback may
+            # complete the replacement synchronously or reserve async work for
+            # its framework interceptor; either way the host operation never
+            # runs after this preflight.
+            self._mark_stopped(result, span)
+            if self._sync_constrain is not None:
+                context = self._trigger_context(span)
+                if self._sync_constrain_accepts_context:
+                    self._sync_constrain(result, context=context)
+                else:
+                    self._sync_constrain(result)
+            self._adapter.raise_hook_blocked(result)  # NoReturn by contract
+            raise GovernanceBlockedError(
+                result.verdict, result.reason or "Constrained (adapter returned)"
+            )
         return True
 
     async def _adecide_started(self, result: EvaluationResult, span: Any) -> bool:
@@ -176,7 +201,42 @@ class HookRuntime:
             else:
                 await self._adapter.handle_approval(result)
             return True
+        if verdict is Verdict.CONSTRAIN:
+            # Match the synchronous path: mark the host action aborted first,
+            # dispatch its sandbox replacement exactly once through the adapter,
+            # then surface the same action-level stop used by BLOCK.
+            self._mark_stopped(result, span)
+            if self._async_constrain is not None:
+                context = self._trigger_context(span)
+                if self._async_constrain_accepts_context:
+                    await self._async_constrain(result, context=context)
+                else:
+                    await self._async_constrain(result)
+            self._adapter.raise_hook_blocked(result)  # NoReturn by contract
+            raise GovernanceBlockedError(
+                result.verdict, result.reason or "Constrained (adapter returned)"
+            )
         return True
+
+    def _trigger_context(self, span: Any):
+        """Return the activity context annotated with the triggering span id."""
+        context = resolve_context(self._store, span)
+        if context is None:
+            return None
+        try:
+            span_context = span.get_span_context()
+            span_id = getattr(span_context, "span_id", None)
+        except Exception:
+            span_id = None
+        if not isinstance(span_id, int) or span_id == 0:
+            return context
+        return replace(
+            context,
+            metadata={
+                **context.metadata,
+                "openbox.trigger_span_id": format_span_id(span_id),
+            },
+        )
 
     def _sync_approval(self, result: EvaluationResult, span: Any) -> bool:
         """Sync approval: adapter-native flow first, core poller fallback.
