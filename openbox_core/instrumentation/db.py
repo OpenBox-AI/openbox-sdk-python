@@ -33,6 +33,23 @@ __all__ = [
 _SPAN_KEY = "_openbox_db_span"
 
 
+def _db_span_name(statement: str | None) -> str:
+    """``db <verb>`` — the name a consumer classifies the operation from.
+
+    Core derives the DB semantic type by matching the verb inside the span NAME
+    (`classifyDBType`), not from `db_operation`, which it never reads. A span
+    named "db query" therefore lands as a generic `database_query` however
+    precise the statement is, so a SELECT and a DELETE are indistinguishable in
+    the record. Core upper-cases the name before matching, so the verb's case
+    here does not matter.
+
+    Falls back to "db query" when there is no statement to read a verb from —
+    the previous name for every DB-API and asyncpg span.
+    """
+    verb = (statement or "").strip().split(" ", 1)[0]
+    return f"db {verb.lower()}" if verb else "db query"
+
+
 def _db_fields(
     statement: str | None,
     system: str,
@@ -110,7 +127,7 @@ def _before_cursor_execute(conn, cursor, statement, parameters, context, execute
     runtime = get_hook_runtime()
     if runtime is None:
         return
-    span = get_tracer().start_span(f"db {statement.strip().split(' ', 1)[0].lower()}")
+    span = get_tracer().start_span(_db_span_name(statement))
     if context is not None:
         setattr(context, _SPAN_KEY, span)
     dialect, db_name, host, port = _sqlalchemy_conn_meta(conn)
@@ -244,7 +261,7 @@ def install_dbapi() -> bool:
             return _original_traced_execution(tracer_self, cursor, query_method, *args, **kwargs)
         statement = tracer_self.get_statement(cursor, args) if args else ""
         system_name, db_name, host, port = _dbapi_conn_meta(tracer_self)
-        span = get_tracer().start_span("db query")
+        span = get_tracer().start_span(_db_span_name(str(statement)))
 
         def _fields() -> dict:
             return _db_fields(
@@ -320,7 +337,7 @@ def install_asyncpg() -> bool:
         if runtime is None:
             return await _original_asyncpg_execute(conn_self, query, *args, **kwargs)
         db_name, host, port = _asyncpg_conn_meta(conn_self)
-        span = get_tracer().start_span("db query")
+        span = get_tracer().start_span(_db_span_name(str(query)))
 
         def _fields() -> dict:
             return _db_fields(
