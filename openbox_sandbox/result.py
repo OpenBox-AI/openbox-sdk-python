@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Any
 
 from .errors import NormalizedSandboxError
+from .runtime_client.types import EgressDecisionEvidence
 
 
 class Disposition(str, Enum):
@@ -44,6 +45,11 @@ class ExecutionMetadata:
     stderr: bytes
     timeout_status: TimeoutStatus
     cleanup_status: CleanupStatus
+    # Per-destination proxy decisions and OS violations the sandbox service
+    # recorded, surfaced so governed command spans can render them.
+    egress_decisions: tuple[EgressDecisionEvidence, ...] = ()
+    violation_count: int | None = None
+    violation_categories: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.sandbox_id, str) or not self.sandbox_id:
