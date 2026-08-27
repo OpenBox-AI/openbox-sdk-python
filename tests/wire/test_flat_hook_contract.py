@@ -19,6 +19,8 @@ from openbox_core.config import PrivacyConfig
 from openbox_core.conformance.fake_core import assert_hook_wire_shape
 from openbox_core.contracts.events import hook
 from openbox_core.contracts.otel_spans import HookType, Stage, from_otel_span
+from openbox_core.errors import ContractError
+from openbox_core.validation.event_rules import check_hook_envelope
 from openbox_core.wire.evaluate_payload import build_evaluate_payload
 
 _ACTIVITY_CONTEXT = {
@@ -72,6 +74,7 @@ _FAMILY_ROOT_FIELDS = {
         "bytes_written",
     ),
     HookType.FUNCTION_CALL: ("function", "module", "args", "result"),
+    HookType.SANDBOX_EXECUTION: (),
 }
 
 _ALL_HOOK_TYPES = list(_FAMILY_ROOT_FIELDS)
@@ -130,6 +133,69 @@ def test_started_stage_emits_explicit_nulls(hook_type):
     assert span["stage"] == "started"
     assert span["end_time"] is None
     assert span["duration_ns"] is None
+
+
+class TestSandboxExecutionPrivacy:
+    SAFE_ATTRIBUTES = {
+        "sandbox.provider": "openshell",
+        "openbox.sandbox.profile_id": "accounts-payable",
+        "openbox.sandbox.compatibility_id": "openbox-direct-hook-v1",
+        "openbox.sandbox.template_sha256": "d" * 64,
+        "openbox.sandbox.image_digest": "sha256:" + "a" * 64,
+        "openbox.sandbox.policy_sha256": "b" * 64,
+        "openbox.sandbox.stdout_bytes": 12,
+        "openbox.sandbox.stdout_sha256": "c" * 64,
+        "openbox.sandbox.cleanup_status": "deleted",
+    }
+
+    def _event(self, *, attributes=None, fields=None):
+        span = FakeSpan(attributes=attributes or self.SAFE_ATTRIBUTES)
+        span_data = from_otel_span(
+            span,
+            stage=Stage.COMPLETED,
+            hook_type=HookType.SANDBOX_EXECUTION,
+            fields=fields,
+        )
+        span_data["name"] = "openbox.sandbox_execution"
+        span_data["kind"] = "INTERNAL"
+        return hook(
+            activity_context=_ACTIVITY_CONTEXT,
+            activity_id="act-sandbox",
+            activity_type="openbox_governed_command",
+            spans=[span_data],
+        )
+
+    def test_allowlisted_bounded_evidence_passes_strict_hook_validation(self):
+        event = self._event()
+        check_hook_envelope(event)
+        payload, _ = build_evaluate_payload(event)
+        span = payload["spans"][0]
+        assert span["hook_type"] == "sandbox_execution"
+        assert span["attributes"] == self.SAFE_ATTRIBUTES
+        assert "request_body" not in span
+        assert "response_body" not in span
+
+    @pytest.mark.parametrize(
+        ("attributes", "fields"),
+        [
+            ({"authorization": "Bearer secret"}, None),
+            ({"openbox.sandbox.stdout_sha256": "not-a-hash"}, None),
+            ({"openbox.sandbox.template_sha256": "not-a-hash"}, None),
+            ({"openbox.sandbox.template_sha256": "D" * 64}, None),
+            ({"openbox.sandbox.compatibility_id": "x" * 513}, None),
+            ({"sandbox.provider": ["openshell"]}, None),
+            ({"sandbox.provider": "openshell"}, {"request_body": "secret"}),
+            ({"sandbox.provider": "openshell"}, {"error": "raw stderr"}),
+            ({"sandbox.provider": "openshell"}, {"events": [{"name": "raw"}]}),
+            (
+                {"sandbox.provider": "openshell"},
+                {"status": {"code": "ERROR", "description": "raw stderr"}},
+            ),
+        ],
+    )
+    def test_unallowlisted_or_unbounded_evidence_fails_before_send(self, attributes, fields):
+        with pytest.raises(ContractError, match="Sandbox execution"):
+            check_hook_envelope(self._event(attributes=attributes, fields=fields))
 
 
 class TestHttpBodyAndHeaders:
@@ -243,7 +309,12 @@ class TestFunctionFields:
         _, span = emit(
             HookType.FUNCTION_CALL,
             Stage.COMPLETED,
-            fields={"function": "charge", "module": "billing", "args": {"args": [5]}, "result": "ok"},
+            fields={
+                "function": "charge",
+                "module": "billing",
+                "args": {"args": [5]},
+                "result": "ok",
+            },
         )
         assert span["function"] == "charge"
         assert span["module"] == "billing"

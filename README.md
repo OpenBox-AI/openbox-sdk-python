@@ -39,6 +39,18 @@ uv sync --extra http    # + HTTP instrumentation targets
 uv sync --extra db      # + DB instrumentation targets
 ```
 
+## Sandbox execution hook contract
+
+`sandbox_execution` hook spans carry privacy-allowlisted, bounded evidence in
+`attributes` only. They must not include raw command output, environment
+variables, credentials, or body-like root fields. Direct hooks may identify the
+sandbox template with `openbox.sandbox.compatibility_id` and the lowercase,
+64-character SHA-256 attribute `openbox.sandbox.template_sha256`, alongside the
+other allowlisted sandbox evidence attributes.
+
+Sandbox hook governance uses the SDK's existing direct evaluate path and does
+not require an OTLP exporter.
+
 ## Import safety
 
 `openbox_core.__init__` and all `openbox_core.contracts.*` modules import
