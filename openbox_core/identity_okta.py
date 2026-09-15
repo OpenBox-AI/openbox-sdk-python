@@ -73,11 +73,12 @@ ASSERTION_LIFETIME_SECONDS = 60  # exp - iat; contract §4 requires <= 60s
 SUPPORTED_ALGORITHMS = ("RS256",)
 
 
-def load_rsa_pkcs8_private_key(pem: str) -> Any:
+def load_rsa_pkcs8_private_key(pem: str, *, key_label: str = "Okta agent private key") -> Any:
     """Load a PKCS8 PEM RSA private key, rejecting <2048-bit keys locally.
 
     Never echoes key bytes in error messages — the PEM is non-repudiation
-    material.
+    material. ``key_label`` identifies the configuration field or identity
+    mode that supplied the key; its default preserves the v2 Okta API.
 
     Raises OpenBoxConfigError on any failure (bad PEM, wrong key type, or an
     undersized modulus).
@@ -90,18 +91,17 @@ def load_rsa_pkcs8_private_key(pem: str) -> Any:
         key = crypto_serialization.load_pem_private_key(pem.encode("utf-8"), password=None)
     except Exception:
         raise OpenBoxConfigError(
-            "Invalid Okta agent private key: could not load a PKCS8 PEM RSA "
+            f"Invalid {key_label}: could not load a PKCS8 PEM RSA "
             "private key (key bytes not shown)."
         ) from None
 
     if not isinstance(key, RSAPrivateKey):
         raise OpenBoxConfigError(
-            "Invalid Okta agent private key: expected an RSA private key "
-            "(key bytes not shown)."
+            f"Invalid {key_label}: expected an RSA private key (key bytes not shown)."
         )
     if key.key_size < MIN_RSA_KEY_BITS:
         raise OpenBoxConfigError(
-            f"Invalid Okta agent private key: RSA modulus is {key.key_size} "
+            f"Invalid {key_label}: RSA modulus is {key.key_size} "
             f"bits, minimum is {MIN_RSA_KEY_BITS} bits (key bytes not shown)."
         )
     return key

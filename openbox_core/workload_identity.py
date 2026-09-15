@@ -305,6 +305,7 @@ def build_private_key_jwt(
     private_key_pem: str,
     document: WorkloadBootstrapDocument | WorkloadTransitionBootstrapDocument,
     *,
+    key_label: str = "workload_private_key",
     issued_at: int | None = None,
     jti: str | None = None,
 ) -> str:
@@ -315,7 +316,7 @@ def build_private_key_jwt(
 
     from .identity_okta import load_rsa_pkcs8_private_key
 
-    signer = load_rsa_pkcs8_private_key(private_key_pem)
+    signer = load_rsa_pkcs8_private_key(private_key_pem, key_label=key_label)
     iat = issued_at if issued_at is not None else int(datetime.now(UTC).timestamp())
     header = {"alg": "RS256", "kid": document.kid, "typ": "JWT"}
     claims = {

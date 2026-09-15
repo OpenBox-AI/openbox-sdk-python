@@ -65,8 +65,16 @@ class TestLoadRsaPkcs8PrivateKey:
             load_rsa_pkcs8_private_key(small_pem)
 
     def test_rejects_malformed_pem_without_echoing_bytes(self):
-        with pytest.raises(OpenBoxConfigError, match="key bytes not shown"):
+        with pytest.raises(OpenBoxConfigError, match="key bytes not shown") as exc_info:
             load_rsa_pkcs8_private_key("not a pem")
+        assert str(exc_info.value).startswith("Invalid Okta agent private key:")
+
+    def test_uses_explicit_key_label_without_echoing_bytes(self):
+        key_material = "not a workload key"
+        with pytest.raises(OpenBoxConfigError) as exc_info:
+            load_rsa_pkcs8_private_key(key_material, key_label="workload_private_key")
+        assert str(exc_info.value).startswith("Invalid workload_private_key:")
+        assert key_material not in str(exc_info.value)
 
     def test_rejects_non_rsa_key(self):
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey

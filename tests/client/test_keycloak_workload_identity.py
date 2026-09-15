@@ -181,6 +181,33 @@ class TestWorkloadBootstrap:
 
 
 class TestWorkloadRouting:
+    @pytest.mark.parametrize(
+        "private_key",
+        [
+            "not-a-key",
+            "-----BEGIN PRIVATE KEY-----\nsensitive-junk\n-----END PRIVATE KEY-----",
+        ],
+    )
+    def test_malformed_key_names_workload_field_without_disclosing_key(self, private_key):
+        server = WorkloadServer()
+        transport = httpx.MockTransport(server)
+        client = EvaluationClient(
+            API_URL,
+            API_KEY,
+            workload_private_key=private_key,
+            transport=transport,
+        )
+
+        with pytest.raises(OpenBoxConfigError) as exc_info:
+            client.validate_api_key()
+
+        assert str(exc_info.value) == (
+            "Invalid workload_private_key: could not load a PKCS8 PEM RSA "
+            "private key (key bytes not shown)."
+        )
+        assert private_key not in str(exc_info.value)
+        assert server.calls == []
+
     def test_internal_token_exchange_is_not_governed(self, monkeypatch):
         server = WorkloadServer()
         client = make_client(server)
@@ -315,6 +342,27 @@ class WorkloadTransitionServer:
 
 
 class TestWorkloadTransitionProof:
+    def test_malformed_candidate_names_candidate_field(self):
+        server = WorkloadTransitionServer()
+        transport = httpx.MockTransport(server)
+        client = EvaluationClient(
+            API_URL,
+            API_KEY,
+            transport=transport,
+        )
+
+        with pytest.raises(OpenBoxConfigError) as exc_info:
+            client.prove_workload_identity_transition(
+                TRANSITION_ID,
+                candidate_private_key="not-a-candidate-key",
+            )
+
+        assert str(exc_info.value).startswith("Invalid candidate_private_key:")
+        assert "not-a-candidate-key" not in str(exc_info.value)
+        assert [request.url.path for request in server.calls] == [
+            WORKLOAD_TRANSITION_BOOTSTRAP_PATH_V3
+        ]
+
     def test_proves_candidate_without_activating_or_exchanging_token(self):
         server = WorkloadTransitionServer()
         transport = httpx.MockTransport(server)

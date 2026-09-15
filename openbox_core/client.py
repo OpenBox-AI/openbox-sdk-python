@@ -299,7 +299,11 @@ class EvaluationClient:
         private_key = self._workload_private_key
         if not private_key:
             raise OpenBoxConfigError("No Keycloak workload private key is configured.")
-        assertion = build_private_key_jwt(private_key, document)
+        assertion = build_private_key_jwt(
+            private_key,
+            document,
+            key_label="workload_private_key",
+        )
         body = urlencode(
             {
                 "grant_type": "client_credentials",
@@ -347,7 +351,7 @@ class EvaluationClient:
         if not private_key:
             return None
         # Fail locally before publishing or requesting any authority metadata.
-        load_rsa_pkcs8_private_key(private_key)
+        load_rsa_pkcs8_private_key(private_key, key_label="workload_private_key")
         bootstrap_url, bootstrap_headers = self._workload_bootstrap_request()
         try:
             response = self._sync().get(bootstrap_url, headers=bootstrap_headers)
@@ -385,7 +389,7 @@ class EvaluationClient:
         private_key = self._workload_private_key
         if not private_key:
             return None
-        load_rsa_pkcs8_private_key(private_key)
+        load_rsa_pkcs8_private_key(private_key, key_label="workload_private_key")
         bootstrap_url, bootstrap_headers = self._workload_bootstrap_request()
         try:
             response = await self._async().get(bootstrap_url, headers=bootstrap_headers)
@@ -1157,7 +1161,13 @@ class EvaluationClient:
             raise OpenBoxConfigError(
                 "Workload transition bootstrap did not match the requested transition."
             )
-        assertion = build_private_key_jwt(private_key, document)
+        assertion = build_private_key_jwt(
+            private_key,
+            document,
+            key_label=(
+                "candidate_private_key" if candidate_private_key else "workload_private_key"
+            ),
+        )
         body = serialize_body(
             {"transition_id": document.transition_id, "client_assertion": assertion}
         )
@@ -1214,7 +1224,13 @@ class EvaluationClient:
             raise OpenBoxConfigError(
                 "Workload transition bootstrap did not match the requested transition."
             )
-        assertion = build_private_key_jwt(private_key, document)
+        assertion = build_private_key_jwt(
+            private_key,
+            document,
+            key_label=(
+                "candidate_private_key" if candidate_private_key else "workload_private_key"
+            ),
+        )
         body = serialize_body(
             {"transition_id": document.transition_id, "client_assertion": assertion}
         )
