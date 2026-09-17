@@ -41,6 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No failure path downgrades to v1, to an unsigned request, or to a different identity
   method. A Core that predates the endpoint (`404`) produces actionable upgrade guidance.
 
+## [1.3.1] - 2026-09-17
+
+### Security
+- Require `cryptography>=50,<51` to address CVE-2026-69247. No OpenBox SDK API or
+  runtime behavior changes are included in this patch release.
+
 ## [1.3.0] - 2026-07-30
 
 ### Added
