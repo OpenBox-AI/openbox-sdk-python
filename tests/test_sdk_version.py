@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import tomllib
+from pathlib import Path
+
 import httpx
 
 import openbox_core
@@ -8,6 +11,14 @@ from openbox_core.config import OpenBoxConfig
 from openbox_core.identity import build_auth_headers
 from openbox_core.runtime import OpenBoxRuntime
 from openbox_core.sdk_version import build_sdk_identifier, normalize_sdk_version
+
+
+def test_package_version_matches_project_metadata():
+    pyproject = tomllib.loads(
+        (Path(__file__).parents[1] / "pyproject.toml").read_text()
+    )
+
+    assert openbox_core.__version__ == pyproject["project"]["version"]
 
 
 def test_build_sdk_identifier_defaults_to_base_python_package_version():
