@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "set_ignored_url_prefixes",
+    "suppress_http_instrumentation",
     "should_ignore_url",
     "sanitize_headers",
     "install_requests",
@@ -50,6 +51,9 @@ def _is_text_content_type(content_type: str | None) -> bool:
 
 
 _ignored_url_prefixes: set[str] = set()
+_http_instrumentation_suppressed: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_http_instrumentation_suppressed", default=False
+)
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
@@ -84,6 +88,17 @@ def set_ignored_url_prefixes(prefixes: set[str]) -> None:
     _ignored_url_prefixes = {_normalize_url_prefix(p) for p in prefixes if p}
 
 
+@contextlib.contextmanager
+def suppress_http_instrumentation():
+    """Exclude a scoped SDK-owned HTTP exchange from governance hooks."""
+
+    token = _http_instrumentation_suppressed.set(True)
+    try:
+        yield
+    finally:
+        _http_instrumentation_suppressed.reset(token)
+
+
 # Headers whose values are credentials/secrets — never ship them into
 # governance payloads (they land in Core logs verbatim otherwise).
 _SENSITIVE_HEADERS = frozenset(
@@ -115,6 +130,8 @@ def sanitize_headers(headers: Any) -> dict | None:
 
 
 def should_ignore_url(url: str | None) -> bool:
+    if _http_instrumentation_suppressed.get():
+        return True
     if not url:
         return True
     normalized = _normalize_url_prefix(url)
