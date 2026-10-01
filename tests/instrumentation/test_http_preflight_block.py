@@ -207,9 +207,10 @@ class TestHttpxLibrary:
             with httpx_library.Client(transport=transport) as client:
                 with client.stream("GET", "https://service.test/stream") as response:
                     assert consumed == []
+                    assert fake_core.completed_payloads == []
                     assert response.read() == b"streamed response"
         assert len(fake_core.completed_payloads) == 1
-        assert fake_core.completed_payloads[0]["spans"][0]["response_body"] is None
+        assert fake_core.completed_payloads[0]["spans"][0]["response_body"] == "streamed response"
 
     async def test_async_streaming_response_is_not_consumed(self, httpx_library):
         consumed = []
@@ -226,9 +227,10 @@ class TestHttpxLibrary:
             async with httpx_library.AsyncClient(transport=transport) as client:
                 async with client.stream("GET", "https://service.test/stream") as response:
                     assert consumed == []
+                    assert fake_core.completed_payloads == []
                     assert await response.aread() == b"streamed response"
         assert len(fake_core.completed_payloads) == 1
-        assert fake_core.completed_payloads[0]["spans"][0]["response_body"] is None
+        assert fake_core.completed_payloads[0]["spans"][0]["response_body"] == "streamed response"
 
 
 class TestHeaderRedaction:

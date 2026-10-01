@@ -221,12 +221,19 @@ def workflow_completed(
     )
 
 
+def _error_payload(error: str | Mapping[str, Any]) -> dict[str, Any]:
+    """Core expects ErrorInfo for lifecycle failures, never a bare string."""
+    if isinstance(error, str):
+        return {"type": "Exception", "message": error}
+    return dict(error)
+
+
 def workflow_failed(
     *,
     workflow_id: str,
     run_id: str,
     workflow_type: str,
-    error: str | None = None,
+    error: str | Mapping[str, Any] | None = None,
     task_queue: str | None = None,
     multi_agent_session_id: str | None = None,
     timestamp: str | None = None,
@@ -237,7 +244,7 @@ def workflow_failed(
         workflow_id, run_id, workflow_type, task_queue, multi_agent_session_id, extra
     )
     if error is not None:
-        payload["error"] = error
+        payload["error"] = _error_payload(error)
     return EventEnvelope(
         event_type=EventType.WORKFLOW_FAILED, payload=payload, timestamp=timestamp
     )
@@ -283,7 +290,7 @@ def activity_completed(
     activity_type: str,
     task_queue: str | None = None,
     result: Any = None,
-    error: str | None = None,
+    error: str | Mapping[str, Any] | None = None,
     attempt: int | None = None,
     multi_agent_session_id: str | None = None,
     timestamp: str | None = None,
@@ -301,7 +308,7 @@ def activity_completed(
     if result is not None:
         payload["result"] = result
     if error is not None:
-        payload["error"] = error
+        payload["error"] = _error_payload(error)
     if attempt is not None:
         payload["attempt"] = attempt
     return EventEnvelope(

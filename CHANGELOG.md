@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Capture streamed text response bodies for sync/async `httpx` and `httpx2`
+  requests without consuming the stream ahead of the caller. Emit completed
+  telemetry once on EOF, close, or read failure, with bounded body capture and
+  the original span/activity identity preserved.
+
 ## [1.4.0] - 2026-10-02
 
 ### Added

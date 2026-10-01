@@ -18,7 +18,10 @@ import logging
 import time
 from typing import Any
 
+from ..context import activity_scope
 from ..contracts.otel_spans import HookType
+from ..hooks.events import resolve_context
+from .http_stream import capture_async_response_stream, capture_response_stream
 from .shared import get_hook_runtime
 
 logger = logging.getLogger(__name__)
@@ -393,7 +396,8 @@ def uninstall_httpx() -> None:
 #
 # Separate from OTel instrumentation: OTel hooks receive streams that cannot be
 # consumed. Patching send lets us read the request body (buffered before send)
-# and the response body (cached by httpx after a non-streaming send) safely.
+# and the response body safely. Unread streams are observed as the caller reads
+# them; completed telemetry waits for stream consumption or explicit close.
 
 # Each library has distinct client classes. Keep its originals independent,
 # including in the wrapper closures, so installing/restoring one cannot affect
@@ -491,6 +495,22 @@ def _httpx_completed_fields(
     }
 
 
+def _stream_completed_fields(
+    request: Any, response: Any, span: Any, start: float,
+    request_body: str | None, request_headers: dict | None,
+    body: str | None, error: str | None, partial: bool,
+) -> dict:
+    with contextlib.suppress(Exception):
+        span.set_attribute("openbox.http.response_body.partial", partial)
+    fields = _httpx_completed_fields(
+        request, response, int((time.perf_counter() - start) * 1e9),
+        request_body, request_headers, body, sanitize_headers(response.headers),
+    )
+    if error is not None:
+        fields["error"] = error
+    return fields
+
+
 def install_httpx_body_capture() -> bool:
     """Capture both stages for httpx; install AFTER ``install_httpx``."""
     return _install_httpx_body_capture("httpx")
@@ -524,8 +544,10 @@ def _install_httpx_body_capture(module_name: str) -> bool:
             return original_send(self, request, *args, **kwargs)
         request_body, request_headers = _capture_httpx_request(request)
         span = _start_httpx_span(request)
+        context = resolve_context(runtime._store, span)
         patch_token = _httpx_patch_span_var.set(span)
         start = time.perf_counter()
+        deferred = False
         try:
             runtime.preflight(
                 span,
@@ -539,6 +561,31 @@ def _install_httpx_body_capture(module_name: str) -> bool:
                 },
             )
             response = original_send(self, request, *args, **kwargs)
+            if not response.is_stream_consumed:
+                # An unbound request must not acquire another activity's
+                # context just because its body is consumed later.
+                if context is None or not context.activity_id or not context.activity_type:
+                    return response
+
+                def complete(body: str | None, error: str | None, partial: bool) -> None:
+                    try:
+                        fields = _stream_completed_fields(
+                            request, response, span, start, request_body, request_headers,
+                            body, error, partial,
+                        )
+                        with activity_scope(context, store=runtime._store):
+                            runtime.completed(span, hook_type=HookType.HTTP_REQUEST, fields=fields)
+                    finally:
+                        span.end()
+
+                capture_response_stream(
+                    response,
+                    max_chars=runtime._runtime.config.privacy.max_body_size,
+                    capture_text=_is_text_content_type(response.headers.get("content-type")),
+                    complete=complete,
+                )
+                deferred = True
+                return response
             duration_ns = int((time.perf_counter() - start) * 1e9)
             response_body, response_headers = _capture_httpx_response(response)
             runtime.completed(
@@ -557,8 +604,9 @@ def _install_httpx_body_capture(module_name: str) -> bool:
             return response
         finally:
             _httpx_patch_span_var.reset(patch_token)
-            with contextlib.suppress(Exception):
-                span.end()
+            if not deferred:
+                with contextlib.suppress(Exception):
+                    span.end()
 
     async def _patched_async_send(self: Any, request: Any, *args: Any, **kwargs: Any) -> Any:
         runtime = get_hook_runtime()
@@ -567,8 +615,10 @@ def _install_httpx_body_capture(module_name: str) -> bool:
             return await original_async_send(self, request, *args, **kwargs)
         request_body, request_headers = _capture_httpx_request(request)
         span = _start_httpx_span(request)
+        context = resolve_context(runtime._store, span)
         patch_token = _httpx_patch_span_var.set(span)
         start = time.perf_counter()
+        deferred = False
         try:
             await runtime.apreflight(
                 span,
@@ -582,6 +632,31 @@ def _install_httpx_body_capture(module_name: str) -> bool:
                 },
             )
             response = await original_async_send(self, request, *args, **kwargs)
+            if not response.is_stream_consumed:
+                if context is None or not context.activity_id or not context.activity_type:
+                    return response
+
+                async def complete(body: str | None, error: str | None, partial: bool) -> None:
+                    try:
+                        fields = _stream_completed_fields(
+                            request, response, span, start, request_body, request_headers,
+                            body, error, partial,
+                        )
+                        with activity_scope(context, store=runtime._store):
+                            await runtime.acompleted(
+                                span, hook_type=HookType.HTTP_REQUEST, fields=fields
+                            )
+                    finally:
+                        span.end()
+
+                capture_async_response_stream(
+                    response,
+                    max_chars=runtime._runtime.config.privacy.max_body_size,
+                    capture_text=_is_text_content_type(response.headers.get("content-type")),
+                    complete=complete,
+                )
+                deferred = True
+                return response
             duration_ns = int((time.perf_counter() - start) * 1e9)
             response_body, response_headers = _capture_httpx_response(response)
             await runtime.acompleted(
@@ -600,8 +675,9 @@ def _install_httpx_body_capture(module_name: str) -> bool:
             return response
         finally:
             _httpx_patch_span_var.reset(patch_token)
-            with contextlib.suppress(Exception):
-                span.end()
+            if not deferred:
+                with contextlib.suppress(Exception):
+                    span.end()
 
     library.Client.send = _patched_send
     library.AsyncClient.send = _patched_async_send

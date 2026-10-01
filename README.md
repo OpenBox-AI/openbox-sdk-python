@@ -48,6 +48,17 @@ requests when `httpx2` is installed by the host application. It uses the same
 HTTP toggle and started/completed span payloads as `httpx`, including body
 capture and credential-header redaction.
 
+For streamed `httpx`/`httpx2` responses, completed telemetry is emitted when the
+caller finishes reading the decoded body or closes the response. Text chunks are
+copied as they pass through; the SDK does not drain or buffer the entire stream.
+SSE responses retain their raw event text in `response_body`. Capture respects
+`privacy.max_body_size` (characters); when that limit is disabled, streaming
+capture still uses a 65,536-character bound. Binary bodies are not captured.
+A response closed before transport EOF records the consumed prefix and sets
+`attributes["openbox.http.response_body.partial"]` to `true`. This includes clients
+that stop reading after an SSE end marker and then close the HTTP response.
+Stream read failures retain their original exception and report partial evidence.
+
 ## Okta AI Agent identity (`okta_ai_agent`)
 
 An agent whose OpenBox identity is verified against an Okta AI Agent credential

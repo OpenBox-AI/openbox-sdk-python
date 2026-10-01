@@ -142,7 +142,7 @@ class TestFactoriesValidation:
 
     def test_workflow_failed_carries_error(self):
         body = workflow_failed(**WF, error="boom").to_payload_dict()
-        assert body["error"] == "boom"
+        assert body["error"] == {"type": "Exception", "message": "boom"}
 
 
 class TestRfc3339:
