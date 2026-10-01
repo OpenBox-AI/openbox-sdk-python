@@ -2,12 +2,16 @@
 
 import asyncio
 import builtins
+import sys
 
+import httpx
+import httpx2
 import requests
 from conftest import ACTIVITY_CTX, FakeCore, RaisingHookAdapter, build_runtime
 from instrumented_env import CountingHTTPServer, bound_activity, installed_runtime
 
 from openbox_core.context import ContextStore, activity_scope
+from openbox_core.instrumentation import http as http_instrumentation
 from openbox_core.instrumentation.http import should_ignore_url
 from openbox_core.instrumentation.manager import InstrumentationManager
 from openbox_core.otel.span_processor import OpenBoxSpanProcessor
@@ -19,13 +23,25 @@ class TestIdempotentInstall:
         runtime = build_runtime(fake_core, RaisingHookAdapter(), ContextStore())
         manager = InstrumentationManager(runtime)
         original_open = builtins.open
+        original_sends = {
+            library: (library.Client.send, library.AsyncClient.send) for library in (httpx, httpx2)
+        }
         manager.install()
-        first_targets = manager.installed_targets
-        manager.install()  # idempotent — no double patch
-        assert manager.installed_targets == first_targets
-        manager.uninstall()
+        try:
+            first_targets = manager.installed_targets
+            assert "httpx_body_capture" in first_targets
+            assert "httpx2_body_capture" in first_targets
+            for library, (sync_send, async_send) in original_sends.items():
+                assert library.Client.send is not sync_send
+                assert library.AsyncClient.send is not async_send
+            manager.install()  # idempotent — no double patch
+            assert manager.installed_targets == first_targets
+        finally:
+            manager.uninstall()
         manager.uninstall()  # idempotent
         assert builtins.open is original_open
+        for library, sends in original_sends.items():
+            assert (library.Client.send, library.AsyncClient.send) == sends
 
     def test_uninstall_restores_open_when_file_enabled(self):
         fake_core = FakeCore()
@@ -39,6 +55,7 @@ class TestIdempotentInstall:
 
     def test_toggles_respected(self):
         fake_core = FakeCore()
+        original_sends = (httpx2.Client.send, httpx2.AsyncClient.send)
         runtime = build_runtime(
             fake_core, RaisingHookAdapter(), ContextStore(),
             http_enabled=False, db_enabled=False,
@@ -47,6 +64,8 @@ class TestIdempotentInstall:
         manager.install()
         try:
             assert "requests" not in manager.installed_targets
+            assert "httpx2_body_capture" not in manager.installed_targets
+            assert (httpx2.Client.send, httpx2.AsyncClient.send) == original_sends
             assert "sqlalchemy" not in manager.installed_targets
         finally:
             manager.uninstall()
@@ -59,6 +78,46 @@ class TestIdempotentInstall:
         assert builtins.open is not original_open
         runtime.close()
         assert builtins.open is original_open
+
+    def test_missing_httpx2_keeps_httpx_capture_working(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "httpx2", None)
+        fake_core, store = FakeCore(), ContextStore()
+        transport = httpx.MockTransport(lambda request: httpx.Response(200))
+        with installed_runtime(fake_core, store=store) as runtime, bound_activity(store):
+            assert "httpx2_body_capture" not in runtime._instrumentation_manager.installed_targets
+            with httpx.Client(transport=transport) as client:
+                assert client.get("https://service.test/echo").status_code == 200
+        assert len(fake_core.started_payloads) == 1
+        assert len(fake_core.completed_payloads) == 1
+
+    def test_httpx2_does_not_require_httpx_instrumentor(self, monkeypatch):
+        monkeypatch.setattr(http_instrumentation, "install_httpx", lambda: False)
+        fake_core, store = FakeCore(), ContextStore()
+        transport = httpx2.MockTransport(lambda request: httpx2.Response(200))
+        with installed_runtime(fake_core, store=store), bound_activity(store):
+            with httpx2.Client(transport=transport) as client:
+                assert client.get("https://service.test/echo").status_code == 200
+        assert len(fake_core.started_payloads) == 1
+        assert len(fake_core.completed_payloads) == 1
+
+    def test_httpx2_restore_and_reinstall_does_not_affect_httpx(self):
+        fake_core, store = FakeCore(), ContextStore()
+        original_sends = (httpx2.Client.send, httpx2.AsyncClient.send)
+        with installed_runtime(fake_core, store=store), bound_activity(store):
+            http_instrumentation.uninstall_httpx2_body_capture()
+            http_instrumentation.uninstall_httpx2_body_capture()
+            assert (httpx2.Client.send, httpx2.AsyncClient.send) == original_sends
+            transport = httpx.MockTransport(lambda request: httpx.Response(200))
+            with httpx.Client(transport=transport) as client:
+                assert client.get("https://service.test/echo").status_code == 200
+            assert http_instrumentation.install_httpx2_body_capture()
+            assert http_instrumentation.install_httpx2_body_capture()
+            transport = httpx2.MockTransport(lambda request: httpx2.Response(200))
+            with httpx2.Client(transport=transport) as client:
+                assert client.get("https://service.test/echo").status_code == 200
+        assert len(fake_core.started_payloads) == 2
+        assert len(fake_core.completed_payloads) == 2
+        assert (httpx2.Client.send, httpx2.AsyncClient.send) == original_sends
 
 
 class TestIgnoredUrls:

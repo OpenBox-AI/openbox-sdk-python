@@ -1,8 +1,8 @@
-"""HTTP wrappers — requests + httpx (sync/async) via OTel instrumentor hooks.
+"""HTTP wrappers — requests + httpx/httpx2 (sync/async).
 
-The instrumentor creates the OTel span and invokes our request hook BEFORE
-the real request is sent; raising from the hook (via hook runtime -> adapter)
-prevents the request. The wrapper itself never interprets verdicts.
+Each wrapper creates or receives an OTel span and invokes the hook runtime
+BEFORE the real request is sent; raising via the adapter prevents the request.
+The wrapper itself never interprets verdicts.
 
 Self-instrumentation guard: URLs under any ignored prefix (always including
 the OpenBox ``api_url``) are skipped so evaluate calls never govern
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import importlib
 import logging
 import time
 from typing import Any
@@ -33,6 +34,8 @@ __all__ = [
     "uninstall_httpx",
     "install_httpx_body_capture",
     "uninstall_httpx_body_capture",
+    "install_httpx2_body_capture",
+    "uninstall_httpx2_body_capture",
     "install_urllib3",
     "uninstall_urllib3",
     "install_urllib",
@@ -386,14 +389,16 @@ def uninstall_httpx() -> None:
         logger.debug("httpx uninstrument skipped", exc_info=True)
 
 
-# ── httpx body capture (Client.send / AsyncClient.send patch) ────────────────
+# ── httpx/httpx2 body capture (Client.send / AsyncClient.send patch) ──────────
 #
 # Separate from OTel instrumentation: OTel hooks receive streams that cannot be
 # consumed. Patching send lets us read the request body (buffered before send)
 # and the response body (cached by httpx after a non-streaming send) safely.
 
-_original_httpx_send: Any = None
-_original_httpx_async_send: Any = None
+# Each library has distinct client classes. Keep its originals independent,
+# including in the wrapper closures, so installing/restoring one cannot affect
+# requests through the other.
+_original_httpx_sends: dict[str, tuple[Any, Any, Any]] = {}
 
 
 def _pop_httpx_span() -> Any:
@@ -487,26 +492,36 @@ def _httpx_completed_fields(
 
 
 def install_httpx_body_capture() -> bool:
-    """Patch httpx ``Client.send``/``AsyncClient.send`` for completed body
-    capture. Idempotent; must be installed AFTER ``install_httpx`` so the
-    captured original send already carries the OTel request hook."""
-    global _original_httpx_send, _original_httpx_async_send
-    if _original_httpx_send is not None:
+    """Capture both stages for httpx; install AFTER ``install_httpx``."""
+    return _install_httpx_body_capture("httpx")
+
+
+def install_httpx2_body_capture() -> bool:
+    """Capture both stages for httpx2 when installed, using the same wire shape.
+
+    The send wrapper creates its own OTel span, so this does not require a
+    newer OTel HTTPX instrumentor with native httpx2 support.
+    """
+    return _install_httpx_body_capture("httpx2")
+
+
+def _install_httpx_body_capture(module_name: str) -> bool:
+    if module_name in _original_httpx_sends:
         return True
     try:
-        import httpx
+        library = importlib.import_module(module_name)
     except ImportError:
-        logger.info("httpx not available for body capture — deferred")
+        logger.info("%s not available for body capture — deferred", module_name)
         return False
 
-    _original_httpx_send = httpx.Client.send
-    _original_httpx_async_send = httpx.AsyncClient.send
+    original_send = library.Client.send
+    original_async_send = library.AsyncClient.send
 
     def _patched_send(self: Any, request: Any, *args: Any, **kwargs: Any) -> Any:
         runtime = get_hook_runtime()
         url = str(getattr(request, "url", "") or "")
         if runtime is None or should_ignore_url(url):
-            return _original_httpx_send(self, request, *args, **kwargs)
+            return original_send(self, request, *args, **kwargs)
         request_body, request_headers = _capture_httpx_request(request)
         span = _start_httpx_span(request)
         patch_token = _httpx_patch_span_var.set(span)
@@ -523,7 +538,7 @@ def install_httpx_body_capture() -> bool:
                     "request_body": request_body,
                 },
             )
-            response = _original_httpx_send(self, request, *args, **kwargs)
+            response = original_send(self, request, *args, **kwargs)
             duration_ns = int((time.perf_counter() - start) * 1e9)
             response_body, response_headers = _capture_httpx_response(response)
             runtime.completed(
@@ -549,7 +564,7 @@ def install_httpx_body_capture() -> bool:
         runtime = get_hook_runtime()
         url = str(getattr(request, "url", "") or "")
         if runtime is None or should_ignore_url(url):
-            return await _original_httpx_async_send(self, request, *args, **kwargs)
+            return await original_async_send(self, request, *args, **kwargs)
         request_body, request_headers = _capture_httpx_request(request)
         span = _start_httpx_span(request)
         patch_token = _httpx_patch_span_var.set(span)
@@ -566,7 +581,7 @@ def install_httpx_body_capture() -> bool:
                     "request_body": request_body,
                 },
             )
-            response = await _original_httpx_async_send(self, request, *args, **kwargs)
+            response = await original_async_send(self, request, *args, **kwargs)
             duration_ns = int((time.perf_counter() - start) * 1e9)
             response_body, response_headers = _capture_httpx_response(response)
             await runtime.acompleted(
@@ -588,26 +603,33 @@ def install_httpx_body_capture() -> bool:
             with contextlib.suppress(Exception):
                 span.end()
 
-    httpx.Client.send = _patched_send
-    httpx.AsyncClient.send = _patched_async_send
+    library.Client.send = _patched_send
+    library.AsyncClient.send = _patched_async_send
+    _original_httpx_sends[module_name] = (library, original_send, original_async_send)
     return True
 
 
 def uninstall_httpx_body_capture() -> None:
     """Restore httpx send (idempotent). Call BEFORE ``uninstall_httpx`` so the
     original chain is unwound in reverse install order."""
-    global _original_httpx_send, _original_httpx_async_send
-    if _original_httpx_send is None:
-        return
-    try:
-        import httpx
+    _uninstall_httpx_body_capture("httpx")
 
-        httpx.Client.send = _original_httpx_send
-        httpx.AsyncClient.send = _original_httpx_async_send
+
+def uninstall_httpx2_body_capture() -> None:
+    """Restore httpx2 send independently of httpx (idempotent)."""
+    _uninstall_httpx_body_capture("httpx2")
+
+
+def _uninstall_httpx_body_capture(module_name: str) -> None:
+    originals = _original_httpx_sends.pop(module_name, None)
+    if originals is None:
+        return
+    library, original_send, original_async_send = originals
+    try:
+        library.Client.send = original_send
+        library.AsyncClient.send = original_async_send
     except Exception:
-        logger.debug("httpx body-capture restore skipped", exc_info=True)
-    _original_httpx_send = None
-    _original_httpx_async_send = None
+        logger.debug("%s body-capture restore skipped", module_name, exc_info=True)
 
 
 # ── urllib3 (OTel URLLib3Instrumentor hooks) ─────────────────────────────────

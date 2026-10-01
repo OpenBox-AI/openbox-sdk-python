@@ -43,6 +43,11 @@ uv sync --extra http    # + HTTP instrumentation targets
 uv sync --extra db      # + DB instrumentation targets
 ```
 
+HTTP instrumentation also captures `httpx2.Client` and `httpx2.AsyncClient`
+requests when `httpx2` is installed by the host application. It uses the same
+HTTP toggle and started/completed span payloads as `httpx`, including body
+capture and credential-header redaction.
+
 ## Okta AI Agent identity (`okta_ai_agent`)
 
 An agent whose OpenBox identity is verified against an Okta AI Agent credential
