@@ -77,6 +77,8 @@ class InstrumentationManager:
                 # the captured original send already carries the request hook.
                 if http_instrumentation.install_httpx_body_capture():
                     self._installed_targets.append("httpx_body_capture")
+            if http_instrumentation.install_httpx2_body_capture():
+                self._installed_targets.append("httpx2_body_capture")
             if http_instrumentation.install_urllib3():
                 self._installed_targets.append("urllib3")
             if http_instrumentation.install_urllib():
@@ -122,6 +124,7 @@ class InstrumentationManager:
         # Reverse install order: unwind the send patch before OTel httpx.
         http_instrumentation.uninstall_urllib()
         http_instrumentation.uninstall_urllib3()
+        http_instrumentation.uninstall_httpx2_body_capture()
         http_instrumentation.uninstall_httpx_body_capture()
         http_instrumentation.uninstall_httpx()
         http_instrumentation.uninstall_requests()

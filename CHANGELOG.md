@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Capture streamed text response bodies for sync/async `httpx` and `httpx2`
+  requests without consuming the stream ahead of the caller. Emit completed
+  telemetry once on EOF, close, or read failure, with bounded body capture and
+  the original span/activity identity preserved.
+
+## [1.4.0] - 2026-10-02
+
 ### Added
+- HTTP span capture for `httpx2.Client` and `httpx2.AsyncClient` when `httpx2`
+  is installed, alongside `httpx`, using the existing HTTP toggle and OpenBox
+  started/completed payload contract.
 - **Okta identity bootstrap** — an `okta_ai_agent` runtime now needs only
   `OPENBOX_API_URL`, `OPENBOX_API_KEY`, and `OPENBOX_OKTA_AGENT_PRIVATE_KEY`. The SDK
   fetches the remaining identity metadata (agent id, organization id, deployment id,

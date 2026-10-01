@@ -17,6 +17,7 @@ import pytest
 # Modules that must never appear in sys.modules after importing a pure module.
 FORBIDDEN_MODULES = (
     "httpx",
+    "httpx2",
     "cryptography",
     "requests",
     "urllib3",
