@@ -30,6 +30,12 @@ from .errors import (
     OpenBoxSigningError,
     extract_governance_error,
 )
+from .on_behalf_of import (
+    current_on_behalf_of,
+    on_behalf_of,
+    reset_on_behalf_of,
+    set_on_behalf_of,
+)
 
 # STATIC on purpose — never read via importlib.metadata. A metadata lookup
 # OPENS A FILE; with file instrumentation active (frameworks patch
@@ -56,4 +62,8 @@ __all__ = [
     "ApprovalRejectedError",
     "ApprovalTimeoutError",
     "extract_governance_error",
+    "on_behalf_of",
+    "set_on_behalf_of",
+    "reset_on_behalf_of",
+    "current_on_behalf_of",
 ]
