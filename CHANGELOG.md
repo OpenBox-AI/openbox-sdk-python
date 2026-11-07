@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Clean-instance remedy. After a barrier refusal with remedy
+  `spawn_clean_instance`, `EvaluationClient.request_clean_instance(scope,
+  reason)` asks for a clean instance and `clean_instance_status(rotation_id)`
+  polls it (async twins `arequest_clean_instance`, `aclean_instance_status`).
+  Once a person approves, the result carries the `instance_id` core issued;
+  run the task inside `exposure_scope(scope, instance_id=...)`, which puts
+  `instance_id` on every event. API-key and OpenBox DID agents only for now.
 - `relay_via_executor(executor_url, destination, body, participants,
   verdict_token)` (and `arelay_via_executor`) makes an allowed call through a
   verdict-bound Executor, with the exact body that was hashed and the declared

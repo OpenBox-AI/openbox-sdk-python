@@ -127,18 +127,25 @@ _action: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
 
 
 @contextmanager
-def exposure_scope(scope: str | None, purpose: str | None = None) -> Iterator[None]:
+def exposure_scope(
+    scope: str | None, purpose: str | None = None, instance_id: str | None = None
+) -> Iterator[None]:
     """Scope governance events in this block to one matter or tenant.
 
     Core keeps one exposure history per agent and scope, so an agent working
     two matters in two scopes is two principals. ``purpose`` is checked
     against the purposes registered for the agent, never trusted as declared.
+    ``instance_id`` runs the block as a clean instance core issued
+    (:meth:`EvaluationClient.request_clean_instance`); an id core did not
+    issue is refused.
     """
     value: dict[str, str] = {}
     if (scope or "").strip():
         value["scope"] = scope.strip()
     if (purpose or "").strip():
         value["purpose"] = purpose.strip()
+    if (instance_id or "").strip():
+        value["instance_id"] = instance_id.strip()
     token = _scope.set(value or None)
     try:
         yield

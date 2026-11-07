@@ -41,7 +41,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
-from .contracts.results import ApprovalResult, EvaluationResult
+from .contracts.results import ApprovalResult, CleanInstance, EvaluationResult
 from .errors import (
     GovernanceAPIError,
     OpenBoxAuthError,
@@ -106,6 +106,10 @@ HANDOFF_PATH_V2 = "/api/v2/handoffs"
 # v3 composes the existing API key with a Keycloak service-account token.
 EVALUATE_PATH_V3 = "/api/v3/governance/evaluate"
 APPROVAL_PATH_V3 = "/api/v3/governance/approval"
+
+# Clean-instance remedy (exposure barriers). v1 identities only for now.
+ROTATE_PATH = "/api/v1/governance/instance/rotate"
+ROTATE_STATUS_PATH = "/api/v1/governance/instance/rotate/status"
 AUTH_VALIDATE_PATH_V3 = "/api/v3/auth/validate"
 HANDOFF_PATH_V3 = "/api/v3/handoffs"
 WORKLOAD_TRANSITION_BOOTSTRAP_PATH_V3 = "/api/v3/auth/workload-transition/bootstrap"
@@ -920,6 +924,68 @@ class EvaluationClient:
             return None
         check_expiration(data)
         return ApprovalResult.from_dict(data)
+
+    # ── Clean-instance remedy (exposure barriers) ─────────────────────────
+
+    def _rotation_request(self, path: str, payload: dict) -> tuple[str, dict, bytes]:
+        if isinstance(self._identity, OktaAgentIdentity) or self._workload_document is not None:
+            raise OpenBoxConfigError(
+                "Clean instances are available to API-key and OpenBox DID agents only for now."
+            )
+        return self._build_prepared("POST", path, path, payload)
+
+    def _parse_rotation(self, response: Any) -> CleanInstance:
+        if response.status_code in (401, 403):
+            raise self._classify_auth_failure(response, signed=self._identity is not None)
+        if response.status_code not in (200, 202):
+            raise OpenBoxNetworkError(f"clean instance request failed: HTTP {response.status_code}")
+        return CleanInstance.from_dict(response.json())
+
+    def request_clean_instance(
+        self,
+        scope: str,
+        reason: str,
+        *,
+        instance_id: str | None = None,
+        retire_old: bool = True,
+    ) -> CleanInstance:
+        """Ask for a clean instance after a barrier refusal whose remedy is
+        ``spawn_clean_instance``. A person approves it; poll
+        :meth:`clean_instance_status` until it is ``activated``, then run the
+        task inside ``exposure_scope(scope, instance_id=result.instance_id)``.
+        ``instance_id`` is the instance the agent runs as now (``None`` for
+        its first). With ``retire_old`` the old instance stops once the new
+        one is issued."""
+        payload = {"scope": scope, "reason": reason, "retire_old": retire_old}
+        if instance_id:
+            payload["instance_id"] = instance_id
+        url, headers, body = self._rotation_request(ROTATE_PATH, payload)
+        return self._parse_rotation(self._sync().post(url, content=body, headers=headers))
+
+    def clean_instance_status(self, rotation_id: str) -> CleanInstance:
+        """Poll a clean-instance request once."""
+        url, headers, body = self._rotation_request(ROTATE_STATUS_PATH, {"rotation_id": rotation_id})
+        return self._parse_rotation(self._sync().post(url, content=body, headers=headers))
+
+    async def arequest_clean_instance(
+        self,
+        scope: str,
+        reason: str,
+        *,
+        instance_id: str | None = None,
+        retire_old: bool = True,
+    ) -> CleanInstance:
+        """Async :meth:`request_clean_instance`."""
+        payload = {"scope": scope, "reason": reason, "retire_old": retire_old}
+        if instance_id:
+            payload["instance_id"] = instance_id
+        url, headers, body = self._rotation_request(ROTATE_PATH, payload)
+        return self._parse_rotation(await self._async().post(url, content=body, headers=headers))
+
+    async def aclean_instance_status(self, rotation_id: str) -> CleanInstance:
+        """Async :meth:`clean_instance_status`."""
+        url, headers, body = self._rotation_request(ROTATE_STATUS_PATH, {"rotation_id": rotation_id})
+        return self._parse_rotation(await self._async().post(url, content=body, headers=headers))
 
     # ── Auth validation ───────────────────────────────────────────────────
 

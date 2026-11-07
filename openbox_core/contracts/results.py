@@ -432,3 +432,26 @@ def handle_patch(
         governance_event_id=governance_event_id,
         reason=result.reason,
     )
+
+
+@dataclass
+class CleanInstance:
+    """A clean-instance request (exposure barriers remedy
+    ``spawn_clean_instance``). ``instance_id`` is set once a person approved
+    it and core issued the instance (``status == "activated"``)."""
+
+    rotation_id: str
+    status: str
+    instance_id: str | None = None
+
+    @property
+    def ready(self) -> bool:
+        return self.status == "activated" and bool(self.instance_id)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> CleanInstance:
+        return cls(
+            rotation_id=str(data.get("rotation_id", "")),
+            status=str(data.get("status", "")),
+            instance_id=data.get("instance_id") or None,
+        )
