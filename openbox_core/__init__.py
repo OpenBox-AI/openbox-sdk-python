@@ -30,6 +30,11 @@ from .errors import (
     OpenBoxSigningError,
     extract_governance_error,
 )
+from .executor import (
+    ExecutorRefused,
+    arelay_via_executor,
+    relay_via_executor,
+)
 from .exposure import (
     Participant,
     Resource,
@@ -80,4 +85,7 @@ __all__ = [
     "governed_action",
     "current_exposure_fields",
     "hash_payload",
+    "ExecutorRefused",
+    "relay_via_executor",
+    "arelay_via_executor",
 ]

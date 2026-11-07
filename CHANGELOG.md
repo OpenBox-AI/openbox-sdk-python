@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `relay_via_executor(executor_url, destination, body, participants,
+  verdict_token)` (and `arelay_via_executor`) makes an allowed call through a
+  verdict-bound Executor, with the exact body that was hashed and the declared
+  participants. A refusal raises `ExecutorRefused`, carrying the class of
+  refusal (`verdict_token`, `barrier`, `executor`) and, for a barrier, the
+  remedy; never labels or rules.
 - `on_behalf_of(user)` context manager (with `set_on_behalf_of` /
   `reset_on_behalf_of` / `current_on_behalf_of`). Every governance event sent
   inside the context carries `on_behalf_of: {user, source}`, which OpenBox
