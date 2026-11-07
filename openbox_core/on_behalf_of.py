@@ -30,11 +30,28 @@ _current: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar
 )
 
 
-def set_on_behalf_of(user: str | None, source: str = DEFAULT_SOURCE) -> contextvars.Token:
+def set_on_behalf_of(
+    user: str | None,
+    source: str = DEFAULT_SOURCE,
+    *,
+    iss: str | None = None,
+    sub: str | None = None,
+) -> contextvars.Token:
     """Set the on-behalf-of user for the current context. ``None`` or an empty
-    string clears it. Returns a token for :func:`reset_on_behalf_of`."""
-    value = (user or "").strip()
-    return _current.set({"user": value, "source": source} if value else None)
+    string clears it. ``iss`` and ``sub`` name the user by IdP issuer and
+    subject, the form exposure-barrier screens and compartments are keyed by;
+    both or neither. Returns a token for :func:`reset_on_behalf_of`."""
+    value: dict[str, str] = {}
+    if (user or "").strip():
+        value["user"] = user.strip()
+    iss, sub = (iss or "").strip(), (sub or "").strip()
+    if bool(iss) != bool(sub):
+        raise ValueError("on_behalf_of needs both iss and sub, or neither")
+    if iss:
+        value["iss"], value["sub"] = iss, sub
+    if value:
+        value["source"] = source
+    return _current.set(value or None)
 
 
 def reset_on_behalf_of(token: contextvars.Token) -> None:
@@ -48,9 +65,15 @@ def current_on_behalf_of() -> dict[str, str] | None:
 
 
 @contextmanager
-def on_behalf_of(user: str | None, source: str = DEFAULT_SOURCE) -> Iterator[None]:
+def on_behalf_of(
+    user: str | None,
+    source: str = DEFAULT_SOURCE,
+    *,
+    iss: str | None = None,
+    sub: str | None = None,
+) -> Iterator[None]:
     """Scope governance events in this block to ``user``."""
-    token = set_on_behalf_of(user, source)
+    token = set_on_behalf_of(user, source, iss=iss, sub=sub)
     try:
         yield
     finally:

@@ -41,7 +41,6 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
-from .on_behalf_of import apply_on_behalf_of
 from .contracts.results import ApprovalResult, EvaluationResult
 from .errors import (
     GovernanceAPIError,
@@ -50,6 +49,7 @@ from .errors import (
     OpenBoxNetworkError,
     map_signing_error,
 )
+from .exposure import apply_exposure
 from .identity import AgentIdentity, build_auth_headers, prepare_signed_request
 from .identity_okta import OktaAgentIdentity, prepare_okta_signed_request
 from .identity_transitions import (
@@ -59,6 +59,7 @@ from .identity_transitions import (
     build_openbox_did_transition_proof_request,
 )
 from .identity_types import OktaAiAgentIdentityConfig, OpenBoxDidIdentityConfig
+from .on_behalf_of import apply_on_behalf_of
 from .sdk_version import DEFAULT_SDK_ENGINE, DEFAULT_SDK_LANGUAGE
 
 if TYPE_CHECKING:
@@ -820,7 +821,7 @@ class EvaluationClient:
         an authentication failure is never a network error). Other NETWORK
         errors never raise under fail_open — they return a
         ``fallback_used=True`` ALLOW."""
-        payload = apply_on_behalf_of(payload)
+        payload = apply_exposure(apply_on_behalf_of(payload))
         url, headers, body = self._prepared(
             "POST", EVALUATE_PATH, EVALUATE_PATH_V2, payload, v3_path=EVALUATE_PATH_V3
         )
@@ -832,7 +833,7 @@ class EvaluationClient:
 
     async def aevaluate(self, payload: dict) -> EvaluationResult:
         """Async :meth:`evaluate`."""
-        payload = apply_on_behalf_of(payload)
+        payload = apply_exposure(apply_on_behalf_of(payload))
         url, headers, body = await self._aprepared(
             "POST", EVALUATE_PATH, EVALUATE_PATH_V2, payload, v3_path=EVALUATE_PATH_V3
         )

@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inside the context carries `on_behalf_of: {user, source}`, which OpenBox
   information barriers check alongside the agent. Use the user's directory
   identity (email or IdP subject). A value already on the payload wins.
+  `on_behalf_of(None, iss=..., sub=...)` names the user by IdP issuer and
+  subject instead.
+- Exposure-barrier span fields. `exposure_scope(scope, purpose=None)` scopes a
+  session to one matter or tenant; `governed_action(action_class, resources,
+  participants)` describes one action, with `Resource(uri, labels,
+  label_source)` and `Participant(kind, id)`. Every governance event sent
+  inside the block carries `scope`, `purpose`, `action_class`, `resources`
+  and `participants`. Fields already on the payload win.
 
 ### Fixed
 - Capture streamed text response bodies for sync/async `httpx` and `httpx2`

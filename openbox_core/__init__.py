@@ -30,6 +30,13 @@ from .errors import (
     OpenBoxSigningError,
     extract_governance_error,
 )
+from .exposure import (
+    Participant,
+    Resource,
+    current_exposure_fields,
+    exposure_scope,
+    governed_action,
+)
 from .on_behalf_of import (
     current_on_behalf_of,
     on_behalf_of,
@@ -66,4 +73,9 @@ __all__ = [
     "set_on_behalf_of",
     "reset_on_behalf_of",
     "current_on_behalf_of",
+    "Resource",
+    "Participant",
+    "exposure_scope",
+    "governed_action",
+    "current_exposure_fields",
 ]
