@@ -152,3 +152,41 @@ class TestDelivery:
         client.evaluate({"event_type": "ActivityStarted"})
         for key in ("scope", "action_class", "resources", "participants"):
             assert key not in sent[0]
+
+
+class TestVerdictBinding:
+    def test_payload_hash_is_sent_and_token_read_back(self):
+        from openbox_core import hash_payload
+
+        sent: list = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={"verdict": "allow", "verdict_token": "vt.sig"})
+
+        transport = httpx.MockTransport(handler)
+        client = EvaluationClient("https://core.test", "obx_test_abc", transport=transport)
+        body = b'{"to":"r1@firm.example"}'
+        with governed_action("send", resources=[COKE_DOC], participants=[R1], payload_hash=hash_payload(body)):
+            result = client.evaluate({"event_type": "ActivityStarted"})
+        assert sent[0]["payload_hash"].startswith("sha256:")
+        assert sent[0]["payload_hash"] == hash_payload(body.decode())
+        assert result.verdict_token == "vt.sig"
+        assert result.barrier is None
+
+    def test_barrier_refusal_is_exposed(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "verdict": "block",
+                    "reason": "Action blocked by policy",
+                    "barrier": {"reason_class": "barrier", "remedy": "spawn_clean_instance", "detail": None},
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        client = EvaluationClient("https://core.test", "obx_test_abc", transport=transport)
+        result = client.evaluate({"event_type": "ActivityStarted"})
+        assert result.barrier == {"reason_class": "barrier", "remedy": "spawn_clean_instance", "detail": None}
+        assert result.verdict_token is None

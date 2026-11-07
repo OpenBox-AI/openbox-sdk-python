@@ -36,6 +36,7 @@ from .exposure import (
     current_exposure_fields,
     exposure_scope,
     governed_action,
+    hash_payload,
 )
 from .on_behalf_of import (
     current_on_behalf_of,
@@ -78,4 +79,5 @@ __all__ = [
     "exposure_scope",
     "governed_action",
     "current_exposure_fields",
+    "hash_payload",
 ]

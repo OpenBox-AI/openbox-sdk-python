@@ -27,6 +27,7 @@ Stdlib only, so ``import openbox_core`` stays side-effect free.
 from __future__ import annotations
 
 import contextvars
+import hashlib
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -145,13 +146,25 @@ def exposure_scope(scope: str | None, purpose: str | None = None) -> Iterator[No
         _scope.reset(token)
 
 
+def hash_payload(data: bytes | str) -> str:
+    """The ``payload_hash`` of an outbound call body: ``sha256:<hex>``. A
+    verdict-bound Executor computes the same hash from the call it relays."""
+    raw = data.encode() if isinstance(data, str) else bytes(data)
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
 @contextmanager
 def governed_action(
     action_class: str,
     resources: Iterable[Resource] = (),
     participants: Iterable[Participant] = (),
+    payload_hash: str | None = None,
 ) -> Iterator[None]:
-    """Describe the action the governance events in this block gate."""
+    """Describe the action the governance events in this block gate.
+
+    ``payload_hash`` (see :func:`hash_payload`) binds the call: an allowed
+    action then returns ``EvaluationResult.verdict_token`` for a
+    verdict-bound Executor."""
     if action_class not in ACTION_CLASSES:
         raise ValueError(f"unknown action_class {action_class!r}")
     value = {
@@ -159,6 +172,8 @@ def governed_action(
         "resources": [r.to_wire() for r in resources],
         "participants": [p.to_wire() for p in participants],
     }
+    if (payload_hash or "").strip():
+        value["payload_hash"] = payload_hash.strip()
     token = _action.set(value)
     try:
         yield
@@ -179,6 +194,8 @@ def current_exposure_fields() -> dict[str, Any]:
             out["resources"] = [dict(r) for r in action["resources"]]
         if action["participants"]:
             out["participants"] = [dict(p) for p in action["participants"]]
+        if action.get("payload_hash"):
+            out["payload_hash"] = action["payload_hash"]
     return out
 
 

@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   label_source)` and `Participant(kind, id)`. Every governance event sent
   inside the block carries `scope`, `purpose`, `action_class`, `resources`
   and `participants`. Fields already on the payload win.
+- `governed_action(..., payload_hash=hash_payload(body))` binds an allowed call:
+  `EvaluationResult.verdict_token` then carries the token a verdict-bound
+  Executor requires. `EvaluationResult.barrier` exposes the confidential
+  barrier refusal `{reason_class, remedy, detail}`.
 
 ### Fixed
 - Capture streamed text response bodies for sync/async `httpx` and `httpx2`
