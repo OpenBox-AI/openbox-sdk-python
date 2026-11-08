@@ -463,3 +463,21 @@ class TestCleanInstanceOnV3:
         rotate = [c for c in server.calls if "/instance/rotate" in c.url.path]
         assert rotate[0].url.path == "/api/v3/governance/instance/rotate"
         assert rotate[0].headers[WORKLOAD_TOKEN_HEADER] == "keycloak-access-token"
+
+
+class VisibleServer(WorkloadServer):
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/separation/visible"):
+            self.calls.append(request)
+            return httpx.Response(200, json={"visible": ["client:coke"], "hidden": []})
+        return super().__call__(request)
+
+
+def test_visibility_query_goes_to_v3_with_the_workload_token():
+    """PROD-1099: a workload-identity agent asks on its own (v3) contract."""
+    server = VisibleServer()
+    out = make_client(server).visible_labels(["client:coke"])
+    assert out.visible == ["client:coke"]
+    call = next(c for c in server.calls if c.url.path.endswith("/separation/visible"))
+    assert call.url.path == "/api/v3/separation/visible"
+    assert call.headers[WORKLOAD_TOKEN_HEADER] == "keycloak-access-token"
