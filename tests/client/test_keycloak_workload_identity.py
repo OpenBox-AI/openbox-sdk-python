@@ -412,3 +412,54 @@ class TestWorkloadTransitionProof:
         )
 
         assert result == {"proof_verified": True}
+
+
+class RotationServer(WorkloadServer):
+    """The workload server, answering the clean-instance routes too."""
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/governance/instance/rotate"):
+            self.calls.append(request)
+            return httpx.Response(202, json={"rotation_id": "rot_1", "status": "pending"})
+        if request.url.path.endswith("/governance/instance/rotate/status"):
+            self.calls.append(request)
+            return httpx.Response(
+                200, json={"rotation_id": "rot_1", "status": "activated", "instance_id": "inst_9"}
+            )
+        return super().__call__(request)
+
+
+class TestCleanInstanceOnV3:
+    """PROD-1095: a workload-identity agent takes the clean-instance remedy on
+    its own (v3) contract, with its workload token, instead of being refused."""
+
+    def test_request_and_status_go_to_v3_with_the_workload_token(self):
+        server = RotationServer()
+        client = make_client(server)
+        r = client.request_clean_instance("matter:0417", "pepsi task")
+        assert (r.rotation_id, r.status) == ("rot_1", "pending")
+        assert client.clean_instance_status("rot_1").instance_id == "inst_9"
+
+        rotate = [c for c in server.calls if "/instance/rotate" in c.url.path]
+        assert [c.url.path for c in rotate] == [
+            "/api/v3/governance/instance/rotate",
+            "/api/v3/governance/instance/rotate/status",
+        ]
+        for c in rotate:
+            assert c.headers[WORKLOAD_TOKEN_HEADER] == "keycloak-access-token"
+        assert json.loads(rotate[0].content) == {
+            "scope": "matter:0417",
+            "reason": "pepsi task",
+            "retire_old": True,
+        }
+
+    def test_async_request_goes_to_v3(self):
+        import asyncio
+
+        server = RotationServer()
+        client = make_client(server)
+        r = asyncio.run(client.arequest_clean_instance("matter:0417", "x"))
+        assert r.rotation_id == "rot_1"
+        rotate = [c for c in server.calls if "/instance/rotate" in c.url.path]
+        assert rotate[0].url.path == "/api/v3/governance/instance/rotate"
+        assert rotate[0].headers[WORKLOAD_TOKEN_HEADER] == "keycloak-access-token"

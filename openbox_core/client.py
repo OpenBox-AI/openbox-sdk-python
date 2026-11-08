@@ -107,9 +107,13 @@ HANDOFF_PATH_V2 = "/api/v2/handoffs"
 EVALUATE_PATH_V3 = "/api/v3/governance/evaluate"
 APPROVAL_PATH_V3 = "/api/v3/governance/approval"
 
-# Clean-instance remedy (exposure barriers). v1 identities only for now.
+# Clean-instance remedy (exposure barriers), on each identity's own contract.
 ROTATE_PATH = "/api/v1/governance/instance/rotate"
 ROTATE_STATUS_PATH = "/api/v1/governance/instance/rotate/status"
+ROTATE_PATH_V2 = "/api/v2/governance/instance/rotate"
+ROTATE_STATUS_PATH_V2 = "/api/v2/governance/instance/rotate/status"
+ROTATE_PATH_V3 = "/api/v3/governance/instance/rotate"
+ROTATE_STATUS_PATH_V3 = "/api/v3/governance/instance/rotate/status"
 AUTH_VALIDATE_PATH_V3 = "/api/v3/auth/validate"
 HANDOFF_PATH_V3 = "/api/v3/handoffs"
 WORKLOAD_TRANSITION_BOOTSTRAP_PATH_V3 = "/api/v3/auth/workload-transition/bootstrap"
@@ -927,12 +931,31 @@ class EvaluationClient:
 
     # ── Clean-instance remedy (exposure barriers) ─────────────────────────
 
-    def _rotation_request(self, path: str, payload: dict) -> tuple[str, dict, bytes]:
-        if isinstance(self._identity, OktaAgentIdentity) or self._workload_document is not None:
-            raise OpenBoxConfigError(
-                "Clean instances are available to API-key and OpenBox DID agents only for now."
+    def _rotation_request(self, status: bool, payload: dict) -> tuple[str, dict, bytes]:
+        # Routed by identity type like evaluate: v1 (API key, OpenBox DID),
+        # v2 (Okta AI agent), v3 (Keycloak workload identity).
+        if status:
+            return self._prepared(
+                "POST",
+                ROTATE_STATUS_PATH,
+                ROTATE_STATUS_PATH_V2,
+                payload,
+                v3_path=ROTATE_STATUS_PATH_V3,
             )
-        return self._build_prepared("POST", path, path, payload)
+        return self._prepared("POST", ROTATE_PATH, ROTATE_PATH_V2, payload, v3_path=ROTATE_PATH_V3)
+
+    async def _arotation_request(self, status: bool, payload: dict) -> tuple[str, dict, bytes]:
+        if status:
+            return await self._aprepared(
+                "POST",
+                ROTATE_STATUS_PATH,
+                ROTATE_STATUS_PATH_V2,
+                payload,
+                v3_path=ROTATE_STATUS_PATH_V3,
+            )
+        return await self._aprepared(
+            "POST", ROTATE_PATH, ROTATE_PATH_V2, payload, v3_path=ROTATE_PATH_V3
+        )
 
     def _parse_rotation(self, response: Any) -> CleanInstance:
         if response.status_code in (401, 403):
@@ -959,12 +982,12 @@ class EvaluationClient:
         payload = {"scope": scope, "reason": reason, "retire_old": retire_old}
         if instance_id:
             payload["instance_id"] = instance_id
-        url, headers, body = self._rotation_request(ROTATE_PATH, payload)
+        url, headers, body = self._rotation_request(False, payload)
         return self._parse_rotation(self._sync().post(url, content=body, headers=headers))
 
     def clean_instance_status(self, rotation_id: str) -> CleanInstance:
         """Poll a clean-instance request once."""
-        url, headers, body = self._rotation_request(ROTATE_STATUS_PATH, {"rotation_id": rotation_id})
+        url, headers, body = self._rotation_request(True, {"rotation_id": rotation_id})
         return self._parse_rotation(self._sync().post(url, content=body, headers=headers))
 
     async def arequest_clean_instance(
@@ -979,12 +1002,12 @@ class EvaluationClient:
         payload = {"scope": scope, "reason": reason, "retire_old": retire_old}
         if instance_id:
             payload["instance_id"] = instance_id
-        url, headers, body = self._rotation_request(ROTATE_PATH, payload)
+        url, headers, body = await self._arotation_request(False, payload)
         return self._parse_rotation(await self._async().post(url, content=body, headers=headers))
 
     async def aclean_instance_status(self, rotation_id: str) -> CleanInstance:
         """Async :meth:`clean_instance_status`."""
-        url, headers, body = self._rotation_request(ROTATE_STATUS_PATH, {"rotation_id": rotation_id})
+        url, headers, body = await self._arotation_request(True, {"rotation_id": rotation_id})
         return self._parse_rotation(await self._async().post(url, content=body, headers=headers))
 
     # ── Auth validation ───────────────────────────────────────────────────
