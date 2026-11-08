@@ -154,6 +154,39 @@ class TestDelivery:
             assert key not in sent[0]
 
 
+class TestModelCallsGenerate:
+    """PROD-1089: a model call is ``generate`` unless something declared otherwise,
+    so an enforced barrier does not refuse it as an action of unknown class."""
+
+    def test_a_model_call_is_generate_in_a_scope(self):
+        sent: list = []
+        client = make_client(sent)
+        with exposure_scope("matter:2026-0417"):
+            client.evaluate({"event_type": "ActivityStarted", "activity_type": "llm_call"})
+        assert sent[0]["action_class"] == "generate"
+        assert sent[0]["scope"] == "matter:2026-0417"
+
+    def test_a_model_call_is_generate_without_a_scope(self):
+        # Core checks every started activity in an organisation with a rule set,
+        # scoped or not, so the class goes out either way.
+        sent: list = []
+        client = make_client(sent)
+        client.evaluate({"event_type": "ActivityStarted", "activity_type": "llm_call"})
+        assert sent[0]["action_class"] == "generate"
+        assert "scope" not in sent[0]
+
+    def test_a_declared_class_wins(self):
+        with governed_action("retrieve", resources=[COKE_DOC]):
+            assert apply_exposure({"activity_type": "llm_call"})["action_class"] == "retrieve"
+        declared = apply_exposure({"activity_type": "llm_call", "action_class": "send"})
+        assert declared["action_class"] == "send"
+
+    def test_other_activities_get_no_class(self):
+        with exposure_scope("matter:2026-0417"):
+            assert "action_class" not in apply_exposure({"activity_type": "tool_call"})
+            assert "action_class" not in apply_exposure({"event_type": "SignalReceived"})
+
+
 class TestVerdictBinding:
     def test_payload_hash_is_sent_and_token_read_back(self):
         from openbox_core import hash_payload

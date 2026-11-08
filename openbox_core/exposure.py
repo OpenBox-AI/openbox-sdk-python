@@ -206,10 +206,23 @@ def current_exposure_fields() -> dict[str, Any]:
     return out
 
 
+#: The action class an event of a given activity type has when nothing
+#: declared one. A model call is ``generate``: the model sees the session's
+#: whole context. Without it, an organisation with an enforced exposure
+#: barrier refuses every model call, since an action of unknown class fails
+#: the labels step.
+DEFAULT_ACTION_CLASS = {"llm_call": "generate"}
+
+
 def apply_exposure(payload: dict[str, Any]) -> dict[str, Any]:
     """Add the context's exposure fields to an evaluate payload. Fields the
-    caller already set win, one by one."""
+    caller already set win, one by one, then the context's, then the
+    activity type's default action class."""
     fields = current_exposure_fields()
+    if "action_class" not in fields:
+        default = DEFAULT_ACTION_CLASS.get(payload.get("activity_type") or "")
+        if default:
+            fields["action_class"] = default
     missing = {k: v for k, v in fields.items() if not payload.get(k)}
     if not missing:
         return payload
