@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Clean-instance remedy. After a barrier refusal with remedy
+  `spawn_clean_instance`, `EvaluationClient.request_clean_instance(scope,
+  reason)` asks for a clean instance and `clean_instance_status(rotation_id)`
+  polls it (async twins `arequest_clean_instance`, `aclean_instance_status`).
+  Once a person approves, the result carries the `instance_id` core issued;
+  run the task inside `exposure_scope(scope, instance_id=...)`, which puts
+  `instance_id` on every event. API-key and OpenBox DID agents only for now.
+- `relay_via_executor(executor_url, destination, body, participants,
+  verdict_token)` (and `arelay_via_executor`) makes an allowed call through a
+  verdict-bound Executor, with the exact body that was hashed and the declared
+  participants. A refusal raises `ExecutorRefused`, carrying the class of
+  refusal (`verdict_token`, `barrier`, `executor`) and, for a barrier, the
+  remedy; never labels or rules.
+- `on_behalf_of(user)` context manager (with `set_on_behalf_of` /
+  `reset_on_behalf_of` / `current_on_behalf_of`). Every governance event sent
+  inside the context carries `on_behalf_of: {user, source}`, which OpenBox
+  information barriers check alongside the agent. Use the user's directory
+  identity (email or IdP subject). A value already on the payload wins.
+  `on_behalf_of(None, iss=..., sub=...)` names the user by IdP issuer and
+  subject instead.
+- Exposure-barrier span fields. `exposure_scope(scope, purpose=None)` scopes a
+  session to one matter or tenant; `governed_action(action_class, resources,
+  participants)` describes one action, with `Resource(uri, labels,
+  label_source)` and `Participant(kind, id)`. Every governance event sent
+  inside the block carries `scope`, `purpose`, `action_class`, `resources`
+  and `participants`. Fields already on the payload win.
+- `governed_action(..., payload_hash=hash_payload(body))` binds an allowed call:
+  `EvaluationResult.verdict_token` then carries the token a verdict-bound
+  Executor requires. `EvaluationResult.barrier` exposes the confidential
+  barrier refusal `{reason_class, remedy, detail}`.
+
 ### Fixed
 - Capture streamed text response bodies for sync/async `httpx` and `httpx2`
   requests without consuming the stream ahead of the caller. Emit completed

@@ -30,6 +30,25 @@ from .errors import (
     OpenBoxSigningError,
     extract_governance_error,
 )
+from .executor import (
+    ExecutorRefused,
+    arelay_via_executor,
+    relay_via_executor,
+)
+from .exposure import (
+    Participant,
+    Resource,
+    current_exposure_fields,
+    exposure_scope,
+    governed_action,
+    hash_payload,
+)
+from .on_behalf_of import (
+    current_on_behalf_of,
+    on_behalf_of,
+    reset_on_behalf_of,
+    set_on_behalf_of,
+)
 
 # STATIC on purpose — never read via importlib.metadata. A metadata lookup
 # OPENS A FILE; with file instrumentation active (frameworks patch
@@ -56,4 +75,17 @@ __all__ = [
     "ApprovalRejectedError",
     "ApprovalTimeoutError",
     "extract_governance_error",
+    "on_behalf_of",
+    "set_on_behalf_of",
+    "reset_on_behalf_of",
+    "current_on_behalf_of",
+    "Resource",
+    "Participant",
+    "exposure_scope",
+    "governed_action",
+    "current_exposure_fields",
+    "hash_payload",
+    "ExecutorRefused",
+    "relay_via_executor",
+    "arelay_via_executor",
 ]

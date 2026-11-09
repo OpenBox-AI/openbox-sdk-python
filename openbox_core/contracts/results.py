@@ -218,6 +218,22 @@ class EvaluationResult:
     patch: Patch | None = None  # Optional BLOCK remediation hint; None = absent
 
     @property
+    def verdict_token(self) -> str | None:
+        """Token binding this ALLOW to the call it allowed, for a
+        verdict-bound Executor (exposure barriers). Present only when the
+        call declared a ``payload_hash`` and an exposure barrier took part."""
+        value = self.raw.get("verdict_token") if self.raw else None
+        return value if isinstance(value, str) and value else None
+
+    @property
+    def barrier(self) -> dict[str, Any] | None:
+        """The confidential barrier refusal ``{reason_class, remedy, detail}``
+        when an exposure barrier decided a BLOCK or HALT; ``None`` otherwise.
+        It names the class of remedy, never a label or counterpart."""
+        value = self.raw.get("barrier") if self.raw else None
+        return dict(value) if isinstance(value, dict) else None
+
+    @property
     def guardrails_result(self) -> GuardrailsResult | None:
         """Alias of ``guardrails`` (same object)."""
         return self.guardrails
@@ -416,3 +432,26 @@ def handle_patch(
         governance_event_id=governance_event_id,
         reason=result.reason,
     )
+
+
+@dataclass
+class CleanInstance:
+    """A clean-instance request (exposure barriers remedy
+    ``spawn_clean_instance``). ``instance_id`` is set once a person approved
+    it and core issued the instance (``status == "activated"``)."""
+
+    rotation_id: str
+    status: str
+    instance_id: str | None = None
+
+    @property
+    def ready(self) -> bool:
+        return self.status == "activated" and bool(self.instance_id)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> CleanInstance:
+        return cls(
+            rotation_id=str(data.get("rotation_id", "")),
+            status=str(data.get("status", "")),
+            instance_id=data.get("instance_id") or None,
+        )
