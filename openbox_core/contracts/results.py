@@ -455,3 +455,26 @@ class CleanInstance:
             status=str(data.get("status", "")),
             instance_id=data.get("instance_id") or None,
         )
+
+
+@dataclass
+class VisibleLabels:
+    """The answer to a visibility query (exposure barriers): which of the
+    asked labels the current agent session may retrieve now. A retriever
+    drops results carrying a hidden label before they reach the model."""
+
+    visible: list[str]
+    hidden: list[str]
+    rule_set_hash: str = ""
+
+    def allows(self, labels: list[str] | tuple[str, ...]) -> bool:
+        """Whether an object carrying all of ``labels`` may be retrieved."""
+        return not any(label in self.hidden for label in labels)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> VisibleLabels:
+        return cls(
+            visible=[str(x) for x in data.get("visible") or []],
+            hidden=[str(x) for x in data.get("hidden") or []],
+            rule_set_hash=str(data.get("rule_set_hash") or ""),
+        )

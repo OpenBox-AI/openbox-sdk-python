@@ -41,7 +41,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
-from .contracts.results import ApprovalResult, CleanInstance, EvaluationResult
+from .contracts.results import ApprovalResult, CleanInstance, EvaluationResult, VisibleLabels
 from .errors import (
     GovernanceAPIError,
     OpenBoxAuthError,
@@ -49,7 +49,7 @@ from .errors import (
     OpenBoxNetworkError,
     map_signing_error,
 )
-from .exposure import apply_exposure
+from .exposure import apply_exposure, current_exposure_fields
 from .identity import AgentIdentity, build_auth_headers, prepare_signed_request
 from .identity_okta import OktaAgentIdentity, prepare_okta_signed_request
 from .identity_transitions import (
@@ -114,6 +114,11 @@ ROTATE_PATH_V2 = "/api/v2/governance/instance/rotate"
 ROTATE_STATUS_PATH_V2 = "/api/v2/governance/instance/rotate/status"
 ROTATE_PATH_V3 = "/api/v3/governance/instance/rotate"
 ROTATE_STATUS_PATH_V3 = "/api/v3/governance/instance/rotate/status"
+
+# Visibility query (exposure barriers): which labels the session may see now.
+VISIBLE_PATH = "/api/v1/separation/visible"
+VISIBLE_PATH_V2 = "/api/v2/separation/visible"
+VISIBLE_PATH_V3 = "/api/v3/separation/visible"
 AUTH_VALIDATE_PATH_V3 = "/api/v3/auth/validate"
 HANDOFF_PATH_V3 = "/api/v3/handoffs"
 WORKLOAD_TRANSITION_BOOTSTRAP_PATH_V3 = "/api/v3/auth/workload-transition/bootstrap"
@@ -1009,6 +1014,61 @@ class EvaluationClient:
         """Async :meth:`clean_instance_status`."""
         url, headers, body = await self._arotation_request(True, {"rotation_id": rotation_id})
         return self._parse_rotation(await self._async().post(url, content=body, headers=headers))
+
+    # ── Visibility query (exposure barriers) ──────────────────────────────
+
+    @staticmethod
+    def _visible_payload(labels: list[str] | tuple[str, ...]) -> dict:
+        # The session is the current exposure_scope (scope, purpose,
+        # instance) and on_behalf_of, exactly as on evaluate.
+        fields = current_exposure_fields()
+        payload: dict = {k: fields[k] for k in ("scope", "purpose", "instance_id") if k in fields}
+        payload["labels"] = list(labels)
+        return apply_on_behalf_of(payload)
+
+    def _parse_visible(self, response: Any) -> VisibleLabels:
+        if response.status_code in (401, 403):
+            raise self._classify_auth_failure(
+                response,
+                signed=self._identity is not None or self._workload_document is not None,
+            )
+        if response.status_code != 200:
+            raise OpenBoxNetworkError(f"visibility query failed: HTTP {response.status_code}")
+        return VisibleLabels.from_dict(response.json())
+
+    def visible_labels(self, labels: list[str] | tuple[str, ...]) -> VisibleLabels:
+        """Ask which of ``labels`` the current session may retrieve now, so a
+        retriever can drop results the barrier would refuse before they reach
+        the model. Run inside the same ``exposure_scope`` (and
+        ``on_behalf_of``) as the agent's actions. A dry run: nothing is
+        recorded. Up to 200 labels."""
+        url, headers, body = self._prepared(
+            "POST",
+            VISIBLE_PATH,
+            VISIBLE_PATH_V2,
+            self._visible_payload(labels),
+            v3_path=VISIBLE_PATH_V3,
+        )
+        try:
+            response = self._sync().post(url, content=body, headers=headers)
+        except Exception as e:
+            raise OpenBoxNetworkError(f"Cannot reach OpenBox Core at {self._api_url}: {e}") from e
+        return self._parse_visible(response)
+
+    async def avisible_labels(self, labels: list[str] | tuple[str, ...]) -> VisibleLabels:
+        """Async :meth:`visible_labels`."""
+        url, headers, body = await self._aprepared(
+            "POST",
+            VISIBLE_PATH,
+            VISIBLE_PATH_V2,
+            self._visible_payload(labels),
+            v3_path=VISIBLE_PATH_V3,
+        )
+        try:
+            response = await self._async().post(url, content=body, headers=headers)
+        except Exception as e:
+            raise OpenBoxNetworkError(f"Cannot reach OpenBox Core at {self._api_url}: {e}") from e
+        return self._parse_visible(response)
 
     # ── Auth validation ───────────────────────────────────────────────────
 
