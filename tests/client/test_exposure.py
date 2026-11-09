@@ -205,21 +205,15 @@ class TestVerdictBinding:
         assert sent[0]["payload_hash"].startswith("sha256:")
         assert sent[0]["payload_hash"] == hash_payload(body.decode())
         assert result.verdict_token == "vt.sig"
-        assert result.barrier is None
 
-    def test_barrier_refusal_is_exposed(self):
+    def test_a_refusal_exposes_nothing_barrier_specific(self):
+        """PROD-1104: a block reads the same whatever decided it."""
         def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200,
-                json={
-                    "verdict": "block",
-                    "reason": "Action blocked by policy",
-                    "barrier": {"reason_class": "barrier", "remedy": "spawn_clean_instance", "detail": None},
-                },
-            )
+            return httpx.Response(200, json={"verdict": "block", "reason": "Action blocked by policy"})
 
         transport = httpx.MockTransport(handler)
         client = EvaluationClient("https://core.test", "obx_test_abc", transport=transport)
         result = client.evaluate({"event_type": "ActivityStarted"})
-        assert result.barrier == {"reason_class": "barrier", "remedy": "spawn_clean_instance", "detail": None}
+        assert result.reason == "Action blocked by policy"
+        assert not hasattr(result, "barrier")
         assert result.verdict_token is None

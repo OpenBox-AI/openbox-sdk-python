@@ -14,9 +14,10 @@ and the participants it declared::
 
 The Executor refuses a call without a valid token for that exact body and
 participant set, and drops results the admission gate refuses. A refusal
-raises :class:`ExecutorRefused`, which says the class of refusal
-(``verdict_token``, ``barrier`` or ``executor``) and, for a barrier, the
-remedy. It never names labels or rules.
+raises :class:`ExecutorRefused`, which says the class of refusal:
+``verdict_token`` or ``executor`` for the gateway's own refusals, and
+``policy`` when governance refused the results, the same class as any other
+block. It never names labels, rules or that a barrier was involved.
 """
 
 from __future__ import annotations
@@ -43,13 +44,12 @@ class ExecutorRefused(Exception):
     """The Executor did not return the destination's answer."""
 
     def __init__(self, status: int, reason_class: str, reason: str | None,
-                 remedy: str | None, relay_id: str | None) -> None:
+                 relay_id: str | None) -> None:
         self.status = status
         self.reason_class = reason_class
         self.reason = reason
-        self.remedy = remedy
         self.relay_id = relay_id
-        detail = reason or remedy or ""
+        detail = reason or ""
         super().__init__(f"executor refused the call ({reason_class}{': ' + detail if detail else ''})")
 
 
@@ -78,15 +78,15 @@ def executor_request(
 def _check(response: Any) -> Any:
     if response.status_code < 300:
         return response
-    reason_class, reason, remedy = "executor", None, None
+    reason_class, reason = "executor", None
     try:
         data = response.json()
         if isinstance(data, dict) and data.get("refused"):
             reason_class = data.get("reason_class") or reason_class
-            reason, remedy = data.get("reason"), data.get("remedy")
+            reason = data.get("reason")
     except ValueError:
         pass
-    raise ExecutorRefused(response.status_code, reason_class, reason, remedy,
+    raise ExecutorRefused(response.status_code, reason_class, reason,
                           response.headers.get(HEADER_RELAY_ID))
 
 

@@ -226,14 +226,6 @@ class EvaluationResult:
         return value if isinstance(value, str) and value else None
 
     @property
-    def barrier(self) -> dict[str, Any] | None:
-        """The confidential barrier refusal ``{reason_class, remedy, detail}``
-        when an exposure barrier decided a BLOCK or HALT; ``None`` otherwise.
-        It names the class of remedy, never a label or counterpart."""
-        value = self.raw.get("barrier") if self.raw else None
-        return dict(value) if isinstance(value, dict) else None
-
-    @property
     def guardrails_result(self) -> GuardrailsResult | None:
         """Alias of ``guardrails`` (same object)."""
         return self.guardrails

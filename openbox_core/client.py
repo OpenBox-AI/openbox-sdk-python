@@ -972,8 +972,10 @@ class EvaluationClient:
         instance_id: str | None = None,
         retire_old: bool = True,
     ) -> CleanInstance:
-        """Ask for a clean instance after a barrier refusal whose remedy is
-        ``spawn_clean_instance``. A person approves it; poll
+        """Ask for a clean instance to continue ``scope`` with no history.
+        A refusal never says why, so the agent is not told to call this; it
+        is for a workflow or a person who knows a fresh start is wanted. A
+        person approves it; poll
         :meth:`clean_instance_status` until it is ``activated``, then run the
         task inside ``exposure_scope(scope, instance_id=result.instance_id)``.
         ``instance_id`` is the instance the agent runs as now (``None`` for
