@@ -40,14 +40,15 @@ def test_relays_the_hashed_bytes_with_token_and_participants():
     assert hash_payload(req.content) == hash_payload(BODY)
 
 
-def test_barrier_refusal_carries_class_and_remedy_only():
+def test_dropped_results_are_refused_as_policy():
+    """PROD-1104: results governance refused read as a policy refusal."""
     seen: list[httpx.Request] = []
-    refusal = {"refused": True, "reason_class": "barrier", "remedy": "spawn_clean_instance", "relay_id": "rl_1"}
+    refusal = {"refused": True, "reason_class": "policy", "relay_id": "rl_1"}
     with pytest.raises(ExecutorRefused) as e:
         relay_via_executor("http://exec", "dms:main", BODY, [DEST], "vt.sig",
                            transport=_executor(403, refusal, seen))
-    assert e.value.reason_class == "barrier"
-    assert e.value.remedy == "spawn_clean_instance"
+    assert e.value.reason_class == "policy"
+    assert not hasattr(e.value, "remedy")
     assert e.value.relay_id == "rl_1"
 
 
