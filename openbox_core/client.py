@@ -49,7 +49,7 @@ from .errors import (
     OpenBoxNetworkError,
     map_signing_error,
 )
-from .exposure import apply_exposure
+from .exposure import apply_exposure, current_exposure_fields
 from .identity import AgentIdentity, build_auth_headers, prepare_signed_request
 from .identity_okta import OktaAgentIdentity, prepare_okta_signed_request
 from .identity_transitions import (
@@ -1053,8 +1053,24 @@ class EvaluationClient:
 
     # ── Source-authenticated handoff (proposal §13.2/§15.1) ────────────────
 
-    def emit_handoff(self, target_agent_id: str, reason: str | None = None) -> dict[str, Any]:
+    def emit_handoff(
+        self,
+        target_agent_id: str,
+        reason: str | None = None,
+        *,
+        multi_agent_session_id: str | None = None,
+        scope: str | None = None,
+    ) -> dict[str, Any]:
         """POST a source-authenticated handoff.
+
+        Exposure barriers (PROD-1117): when the target is under barriers,
+        Core checks the handoff and the child's session for ``scope`` (default:
+        the current ``exposure_scope``) inherits this agent's exposure. Pass
+        ``multi_agent_session_id`` (required for such a target; the child's
+        return is matched to this handoff by it). The person this agent acts
+        for (``on_behalf_of``) is sent as on evaluate. The result's
+        ``verdict`` is ``"block"`` when the handoff was refused: do not hand
+        the task over.
 
         This client's configured identity is always ``from_agent``;
         ``target_agent_id`` names the receiving OpenBox agent. Routes to
@@ -1066,7 +1082,7 @@ class EvaluationClient:
         silently falls back to the legacy receiver-authenticated governance
         handoff event; un-upgraded callers keep using that event directly.
         """
-        payload = self._handoff_payload(target_agent_id, reason)
+        payload = self._handoff_payload(target_agent_id, reason, multi_agent_session_id, scope)
         url, headers, body = self._prepared(
             "POST", HANDOFF_PATH, HANDOFF_PATH_V2, payload, v3_path=HANDOFF_PATH_V3
         )
@@ -1077,10 +1093,15 @@ class EvaluationClient:
         return self._parse_handoff_response(response)
 
     async def aemit_handoff(
-        self, target_agent_id: str, reason: str | None = None
+        self,
+        target_agent_id: str,
+        reason: str | None = None,
+        *,
+        multi_agent_session_id: str | None = None,
+        scope: str | None = None,
     ) -> dict[str, Any]:
         """Async :meth:`emit_handoff`."""
-        payload = self._handoff_payload(target_agent_id, reason)
+        payload = self._handoff_payload(target_agent_id, reason, multi_agent_session_id, scope)
         url, headers, body = await self._aprepared(
             "POST", HANDOFF_PATH, HANDOFF_PATH_V2, payload, v3_path=HANDOFF_PATH_V3
         )
@@ -1090,7 +1111,13 @@ class EvaluationClient:
             raise OpenBoxNetworkError(f"Cannot reach OpenBox Core at {self._api_url}: {e}") from e
         return self._parse_handoff_response(response)
 
-    def _handoff_payload(self, target_agent_id: str, reason: str | None) -> dict[str, Any]:
+    def _handoff_payload(
+        self,
+        target_agent_id: str,
+        reason: str | None,
+        multi_agent_session_id: str | None = None,
+        scope: str | None = None,
+    ) -> dict[str, Any]:
         # `not self._is_v2`, never `self._identity is None` alone: in bootstrap
         # mode the Okta identity is not resolved until the first request needs
         # it, so testing only the resolved field here would reject a correctly
@@ -1109,7 +1136,13 @@ class EvaluationClient:
         payload: dict[str, Any] = {"target_agent_id": target_agent_id}
         if reason is not None:
             payload["reason"] = reason
-        return payload
+        mas = (multi_agent_session_id or "").strip()
+        if mas:
+            payload["multi_agent_session_id"] = mas
+        handed_scope = (scope or "").strip() or current_exposure_fields().get("scope")
+        if handed_scope:
+            payload["scope"] = handed_scope
+        return apply_on_behalf_of(payload)
 
     def _parse_handoff_response(self, response: Any) -> dict[str, Any]:
         if response.status_code in (401, 403):
