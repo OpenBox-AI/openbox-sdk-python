@@ -187,6 +187,35 @@ def _parse_patch(container: dict[str, Any]) -> Patch | None:
     return Patch(new_input=new_input)
 
 
+@dataclass(frozen=True)
+class Withheld:
+    """Objects an allowed admission kept out of the agent's context
+    (exposure barriers, PROD-1112).
+
+    ``uris`` are the URIs the SDK itself sent as the call's returned
+    resources; the adapter removes those objects before anything reaches the
+    agent. ``notify_user`` is the firm's setting: when true, the host
+    application may tell the user, generically, that some results were
+    withheld (:data:`openbox_core.exposure.WITHHELD_NOTICE`). Neither is ever
+    put in the model's context.
+    """
+
+    uris: tuple[str, ...] = ()
+    notify_user: bool = False
+
+
+def _parse_withheld(value: Any) -> Withheld | None:
+    if not isinstance(value, dict):
+        return None
+    uris = value.get("uris")
+    if not isinstance(uris, list):
+        return None
+    clean = tuple(u for u in uris if isinstance(u, str) and u)
+    if not clean:
+        return None
+    return Withheld(uris=clean, notify_user=value.get("notify_user") is True)
+
+
 @dataclass
 class EvaluationResult:
     """Response from a governance evaluation.
@@ -216,6 +245,10 @@ class EvaluationResult:
     diagnostics: list[Any] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
     patch: Patch | None = None  # Optional BLOCK remediation hint; None = absent
+    #: Objects to remove before they reach the agent (exposure barriers).
+    #: Taken out of ``raw``, so nothing that forwards the raw response can
+    #: pass it on.
+    withheld: Withheld | None = None
 
     @property
     def verdict_token(self) -> str | None:
@@ -264,6 +297,10 @@ class EvaluationResult:
             guardrails = GuardrailsResult.from_dict(data["guardrails"])
 
         verdict = Verdict.from_string(data.get("verdict") or data.get("action", "continue"))
+        data = dict(data)
+        withheld = _parse_withheld(data.pop("withheld", None))
+        if verdict not in (Verdict.ALLOW, Verdict.CONSTRAIN):
+            withheld = None  # only an admission that goes ahead withholds
 
         return cls(
             verdict=verdict,
@@ -281,8 +318,9 @@ class EvaluationResult:
             constraints=data.get("constraints"),
             fallback_used=bool(data.get("fallback_used", False)),
             diagnostics=data.get("diagnostics") or [],
-            raw=dict(data),
+            raw=data,
             patch=_parse_patch(data),
+            withheld=withheld,
         )
 
     @classmethod

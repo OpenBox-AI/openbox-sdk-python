@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import contextvars
 import hashlib
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -227,3 +227,47 @@ def apply_exposure(payload: dict[str, Any]) -> dict[str, Any]:
     if not missing:
         return payload
     return {**payload, **missing}
+
+
+#: The only notice a user is ever given about withheld results (PROD-1112).
+#: It never names an object, client, matter or rule, and is never tied to
+#: which result was withheld. Shown only when the firm turned it on.
+WITHHELD_NOTICE = "Some results were withheld under firm policy."
+
+_withheld_listener: contextvars.ContextVar[Callable[[str], None] | None] = contextvars.ContextVar(
+    "openbox_withheld_listener", default=None
+)
+_withheld_default_listener: Callable[[str], None] | None = None
+
+
+def on_withheld_notice(callback: Callable[[str], None] | None) -> None:
+    """Register the host application's handler for the withheld notice.
+
+    When the firm's ``notify_user_on_withheld`` setting is on and a search
+    had results withheld, ``callback(WITHHELD_NOTICE)`` is called. Show it to
+    the user; never add it to the model's context. ``None`` unregisters.
+    """
+    global _withheld_default_listener
+    _withheld_default_listener = callback
+
+
+@contextmanager
+def withheld_notice(callback: Callable[[str], None]) -> Iterator[None]:
+    """Like :func:`on_withheld_notice`, for one request or session only."""
+    token = _withheld_listener.set(callback)
+    try:
+        yield
+    finally:
+        _withheld_listener.reset(token)
+
+
+def notify_withheld(notify_user: bool) -> bool:
+    """Called by adapters after removing withheld objects. Tells the host,
+    generically, when the firm asked for it. Returns whether it did."""
+    if not notify_user:
+        return False
+    listener = _withheld_listener.get() or _withheld_default_listener
+    if listener is None:
+        return False
+    listener(WITHHELD_NOTICE)
+    return True

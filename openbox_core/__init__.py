@@ -36,12 +36,16 @@ from .executor import (
     relay_via_executor,
 )
 from .exposure import (
+    WITHHELD_NOTICE,
     Participant,
     Resource,
     current_exposure_fields,
     exposure_scope,
     governed_action,
     hash_payload,
+    notify_withheld,
+    on_withheld_notice,
+    withheld_notice,
 )
 from .on_behalf_of import (
     current_on_behalf_of,
@@ -85,6 +89,10 @@ __all__ = [
     "governed_action",
     "current_exposure_fields",
     "hash_payload",
+    "WITHHELD_NOTICE",
+    "on_withheld_notice",
+    "withheld_notice",
+    "notify_withheld",
     "ExecutorRefused",
     "relay_via_executor",
     "arelay_via_executor",
