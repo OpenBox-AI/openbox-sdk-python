@@ -224,6 +224,10 @@ class EvaluationClient:
         self._api_key = api_key
         self._timeout = timeout_seconds
         self._on_api_error = on_api_error
+        # Set by the server (PROD-1098): an agent whose organisation has an
+        # exposure-barrier rule set is told to fail closed on every validate
+        # and verdict. Once set it stays for the client's lifetime.
+        self._server_on_api_error: str | None = None
         self._identity = identity
         self._okta_bootstrap_private_key = okta_bootstrap_private_key
         self._workload_private_key = workload_private_key
@@ -851,6 +855,26 @@ class EvaluationClient:
             return self._network_failure(f"Governance API unreachable: {e}")
         return self._parse_evaluate_response(response)
 
+    @property
+    def on_api_error(self) -> str:
+        """The policy in force: ``fail_closed`` if configured locally or
+        pushed by the server, otherwise ``fail_open``."""
+        if "fail_closed" in (self._on_api_error, self._server_on_api_error):
+            return "fail_closed"
+        return self._on_api_error
+
+    @property
+    def server_on_api_error(self) -> str | None:
+        """``on_api_error`` as last pushed by the server, if it pushed one."""
+        return self._server_on_api_error
+
+    def _record_settings(self, data: Any) -> None:
+        settings = data.get("settings") if isinstance(data, dict) else None
+        if isinstance(settings, dict) and settings.get("on_api_error") == "fail_closed":
+            if self._server_on_api_error != "fail_closed":
+                logger.info("OpenBox requires fail_closed for this agent (exposure barriers)")
+            self._server_on_api_error = "fail_closed"
+
     def _parse_evaluate_response(self, response: Any) -> EvaluationResult:
         if response.status_code in (401, 403):
             raise self._classify_auth_failure(
@@ -863,6 +887,7 @@ class EvaluationClient:
             data = response.json()
         except Exception as e:
             return self._network_failure(f"Governance API returned unparseable body: {e}")
+        self._record_settings(data)
         result = EvaluationResult.from_dict(data)
         if result.verdict.should_stop():
             logger.info(f"Governance blocked: {result.reason} (policy: {result.policy_id})")
@@ -871,7 +896,7 @@ class EvaluationClient:
     def _network_failure(self, reason: str) -> EvaluationResult:
         """Apply the on_api_error policy to a NETWORK failure."""
         logger.warning(reason)
-        if self._on_api_error == "fail_closed":
+        if self.on_api_error == "fail_closed":
             raise GovernanceAPIError(reason)
         return EvaluationResult.fallback_allow(reason)
 
@@ -1041,6 +1066,10 @@ class EvaluationClient:
 
     def _parse_auth_response(self, response: Any) -> bool:
         if response.status_code == 200:
+            try:
+                self._record_settings(response.json())
+            except Exception:  # an empty or non-JSON body is still a valid key
+                pass
             return True
         if response.status_code in (401, 403):
             raise self._classify_auth_failure(
