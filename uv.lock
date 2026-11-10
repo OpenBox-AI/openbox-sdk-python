@@ -624,7 +624,7 @@ wheels = [
 
 [[package]]
 name = "openbox-sdk-python"
-version = "1.4.0"
+version = "1.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
@@ -667,16 +667,16 @@ requires-dist = [
     { name = "asyncpg", marker = "extra == 'db'", specifier = ">=0.29.0" },
     { name = "cryptography", specifier = ">=50,<51" },
     { name = "httpx", specifier = ">=0.28.0,<1" },
-    { name = "opentelemetry-api", specifier = ">=1.38.0,<1.40.0" },
-    { name = "opentelemetry-instrumentation-asyncpg", marker = "extra == 'db'", specifier = ">=0.59b0,<0.61b0" },
-    { name = "opentelemetry-instrumentation-dbapi", marker = "extra == 'db'", specifier = ">=0.59b0,<0.61b0" },
-    { name = "opentelemetry-instrumentation-httpx", marker = "extra == 'http'", specifier = ">=0.59b0,<0.61b0" },
-    { name = "opentelemetry-instrumentation-redis", marker = "extra == 'db'", specifier = ">=0.59b0,<0.61b0" },
-    { name = "opentelemetry-instrumentation-requests", marker = "extra == 'http'", specifier = ">=0.59b0,<0.61b0" },
-    { name = "opentelemetry-instrumentation-sqlalchemy", marker = "extra == 'db'", specifier = ">=0.59b0,<0.61b0" },
-    { name = "opentelemetry-instrumentation-urllib", marker = "extra == 'http'", specifier = ">=0.59b0,<0.61b0" },
-    { name = "opentelemetry-instrumentation-urllib3", marker = "extra == 'http'", specifier = ">=0.59b0,<0.61b0" },
-    { name = "opentelemetry-sdk", specifier = ">=1.38.0,<1.40.0" },
+    { name = "opentelemetry-api", specifier = ">=1.38.0,<2" },
+    { name = "opentelemetry-instrumentation-asyncpg", marker = "extra == 'db'", specifier = ">=0.59b0,<1" },
+    { name = "opentelemetry-instrumentation-dbapi", marker = "extra == 'db'", specifier = ">=0.59b0,<1" },
+    { name = "opentelemetry-instrumentation-httpx", marker = "extra == 'http'", specifier = ">=0.59b0,<1" },
+    { name = "opentelemetry-instrumentation-redis", marker = "extra == 'db'", specifier = ">=0.59b0,<1" },
+    { name = "opentelemetry-instrumentation-requests", marker = "extra == 'http'", specifier = ">=0.59b0,<1" },
+    { name = "opentelemetry-instrumentation-sqlalchemy", marker = "extra == 'db'", specifier = ">=0.59b0,<1" },
+    { name = "opentelemetry-instrumentation-urllib", marker = "extra == 'http'", specifier = ">=0.59b0,<1" },
+    { name = "opentelemetry-instrumentation-urllib3", marker = "extra == 'http'", specifier = ">=0.59b0,<1" },
+    { name = "opentelemetry-sdk", specifier = ">=1.38.0,<2" },
     { name = "pymongo", marker = "extra == 'db'", specifier = ">=4.6.0" },
     { name = "redis", marker = "extra == 'db'", specifier = ">=5.0.0" },
     { name = "requests", marker = "extra == 'http'", specifier = ">=2.31.0" },

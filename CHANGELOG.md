@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `WorkflowFailed` (bounded by `DRAIN_TIMEOUT_SECONDS`, longer than the lookup
   budget), since Core drops spans that arrive after the session closes. Other
   sessions' lookups are not waited on. `OpenBoxRuntime.close()` drains the rest.
+- OpenTelemetry requirements widened to `opentelemetry-api` / `opentelemetry-sdk`
+  `>=1.38,<2` and the instrumentation packages to `>=0.59b0,<1`. The previous
+  `<1.40` cap matched no CrewAI release (1.14 requires `<1.35`, 1.15 requires
+  `>=1.42`), so the CrewAI SDK could not be installed on this base.
 
 ### Fixed
 - `CoreAdapter.handle_approval` and the sync HTTP preflight no longer require

@@ -23,8 +23,8 @@ classifiers = [
 # httpx/cryptography are required (client/identity are core features) but are
 # lazy-imported inside their modules — never at openbox_core import time.
 dependencies = [
-    "opentelemetry-api>=1.38.0,<1.40.0",
-    "opentelemetry-sdk>=1.38.0,<1.40.0",
+    "opentelemetry-api>=1.38.0,<2",
+    "opentelemetry-sdk>=1.38.0,<2",
     "httpx>=0.28.0,<1",
     "cryptography>=50,<51",
 ]
@@ -33,10 +33,10 @@ dependencies = [
 # HTTP instrumentation targets (installed only when the host app opts in).
 http = [
     "requests>=2.31.0",
-    "opentelemetry-instrumentation-requests>=0.59b0,<0.61b0",
-    "opentelemetry-instrumentation-httpx>=0.59b0,<0.61b0",
-    "opentelemetry-instrumentation-urllib3>=0.59b0,<0.61b0",
-    "opentelemetry-instrumentation-urllib>=0.59b0,<0.61b0",
+    "opentelemetry-instrumentation-requests>=0.59b0,<1",
+    "opentelemetry-instrumentation-httpx>=0.59b0,<1",
+    "opentelemetry-instrumentation-urllib3>=0.59b0,<1",
+    "opentelemetry-instrumentation-urllib>=0.59b0,<1",
 ]
 # DB instrumentation targets.
 db = [
@@ -45,10 +45,10 @@ db = [
     "redis>=5.0.0",
     "pymongo>=4.6.0",
     "wrapt>=1.16.0",
-    "opentelemetry-instrumentation-sqlalchemy>=0.59b0,<0.61b0",
-    "opentelemetry-instrumentation-dbapi>=0.59b0,<0.61b0",
-    "opentelemetry-instrumentation-asyncpg>=0.59b0,<0.61b0",
-    "opentelemetry-instrumentation-redis>=0.59b0,<0.61b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.59b0,<1",
+    "opentelemetry-instrumentation-dbapi>=0.59b0,<1",
+    "opentelemetry-instrumentation-asyncpg>=0.59b0,<1",
+    "opentelemetry-instrumentation-redis>=0.59b0,<1",
 ]
 
 [dependency-groups]
