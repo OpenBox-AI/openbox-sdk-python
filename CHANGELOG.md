@@ -7,7 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-26
+
+### Added
+- OpenRouter routing provenance. After a governed `httpx` call to `openrouter.ai`
+  completes inside an activity, the SDK sends an `llm_provenance` span carrying
+  the generation id, upstream provider, served model, cost, token usage, finish
+  reason and requested-vs-honored routing (`gen_ai.*`, `openbox.routing.*`,
+  `openbox.model.*`). It looks up OpenRouter's generation record within a fixed
+  12-second budget (`LOOKUP_BUDGET_SECONDS`, retries included, counted from the
+  end of the model call) and otherwise sends the provenance in the completion
+  response itself. A rejected lookup (401/403/5xx) is logged with its status.
+  Lookups run on a small pool of daemon threads, so process exit never waits on
+  one. Disable with `OPENBOX_OPENROUTER_PROVENANCE=false`.
+- `HookType.LLM_PROVENANCE`.
+
+### Changed
+- `EvaluationClient.evaluate` / `aevaluate` wait for the closing session's own
+  pending provenance lookups before sending `WorkflowCompleted` or
+  `WorkflowFailed` (bounded by `DRAIN_TIMEOUT_SECONDS`, longer than the lookup
+  budget), since Core drops spans that arrive after the session closes. Other
+  sessions' lookups are not waited on. `OpenBoxRuntime.close()` drains the rest.
+- OpenTelemetry requirements widened to `opentelemetry-api` / `opentelemetry-sdk`
+  `>=1.38,<2` and the instrumentation packages to `>=0.59b0,<1`. The previous
+  `<1.40` cap matched no CrewAI release (1.14 requires `<1.35`, 1.15 requires
+  `>=1.42`), so the CrewAI SDK could not be installed on this base.
+
 ### Fixed
+- `CoreAdapter.handle_approval` and the sync HTTP preflight no longer require
+  an `approval_id`. Core's REQUIRE_APPROVAL verdict does not carry one, so every
+  approval was rejected without a wait. The approval is polled by
+  workflow/run/activity id, and both still fail safe when those are missing.
 - Capture streamed text response bodies for sync/async `httpx` and `httpx2`
   requests without consuming the stream ahead of the caller. Emit completed
   telemetry once on EOF, close, or read failure, with bounded body capture and
